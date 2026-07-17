@@ -98,4 +98,4 @@ cheminformatics course.
 
 ## License
 
-[MIT](LICENSE) © The Wawekit Authors
+[MIT](LICENSE) © Sree Vasthav Upputoori
