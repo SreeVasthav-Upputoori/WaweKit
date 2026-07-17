@@ -1,0 +1,86 @@
+# pyproject.toml — the single source of truth for building and tooling.
+# Modern Python packaging (PEP 517/518/621) reads project metadata from here.
+
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[project]
+name = "wawekit"
+version = "0.1.0"
+description = "Professional open-source desktop cheminformatics toolkit."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "The Wawekit Authors" }]
+keywords = ["cheminformatics", "rdkit", "pyside6", "drug-discovery", "desktop"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: X11 Applications :: Qt",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Chemistry",
+]
+
+# Runtime dependencies. Pin lower bounds; let resolvers pick compatible upgrades.
+dependencies = [
+    "PySide6>=6.6",
+    "rdkit>=2024.3.1",
+    "numpy>=1.26",
+    "pandas>=2.2",
+]
+
+[project.optional-dependencies]
+# Installed with:  pip install -e ".[dev]"
+dev = [
+    "pytest>=8.0",
+    "pytest-qt>=4.4",
+    "black>=24.0",
+    "ruff>=0.5",
+    "mkdocs>=1.6",
+]
+# Heavier scientific extras added in later modules (plots/ML/export).
+science = [
+    "matplotlib>=3.8",
+    "plotly>=5.20",
+    "scikit-learn>=1.4",
+    "openpyxl>=3.1",
+    "reportlab>=4.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/your-org/wawekit"
+Repository = "https://github.com/your-org/wawekit"
+
+# Console/GUI launcher: after `pip install`, users run `wawekit`.
+[project.scripts]
+wawekit = "wawekit.app:run"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/wawekit"]
+
+# --- Tooling configuration (kept here so there is one config file) ---------
+
+[tool.black]
+line-length = 100
+target-version = ["py312"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+# E/F: pyflakes+pycodestyle, I: isort, UP: pyupgrade, B: bugbear, D: docstrings.
+select = ["E", "F", "I", "UP", "B", "D"]
+# D203/D213: conflicting docstring-style pairs — we use the numpy convention.
+# D107: __init__ args are documented in the class docstring (numpy style).
+ignore = ["D203", "D213", "D107"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["D"]  # tests need not be docstring-complete.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

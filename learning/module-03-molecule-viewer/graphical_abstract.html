@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wawekit · Module 3 — Molecule Viewer (Graphical Abstract)</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #1a1d23; --panel2: #22262e; --line: #2f343d;
+    --text: #e7e9ee; --muted: #a3abb8; --accent: #4f8cc9;
+    --model: #6fbf73; --service: #e0a458; --gui: #4f8cc9; --warn: #d6a05a;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+    line-height: 1.5; padding: 32px; }
+  .sheet { max-width: 1000px; margin: 0 auto; }
+  header { border-bottom: 2px solid var(--line); padding-bottom: 16px; margin-bottom: 24px; }
+  .tag { color: var(--accent); font-weight: 700; letter-spacing: .08em; font-size: 13px; text-transform: uppercase; }
+  h1 { margin: 6px 0 4px; font-size: 28px; }
+  .sub { color: var(--muted); font-size: 15px; }
+  h2 { font-size: 16px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 28px 0 12px; }
+  .grid { display: grid; gap: 16px; }
+  .cols-2 { grid-template-columns: 1fr 1fr; }
+  @media (max-width: 720px) { .cols-2 { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  .node { border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; background: var(--panel2); font-size: 13px; flex: 1 1 150px; }
+  .node b { display: block; font-size: 14px; margin-bottom: 2px; }
+  .node span { color: var(--muted); font-size: 12px; }
+  .n-gui { border-left: 4px solid var(--gui); }
+  .n-svc { border-left: 4px solid var(--service); }
+  .prow { display: flex; gap: 10px; align-items: stretch; flex-wrap: wrap; }
+  .down { text-align: center; color: var(--muted); font-size: 13px; margin: 6px 0; }
+  ul.clean { margin: 0; padding-left: 18px; }
+  ul.clean li { margin: 4px 0; color: var(--muted); }
+  ul.clean li b { color: var(--text); }
+  code { background: var(--panel2); padding: 1px 6px; border-radius: 4px; font-size: 13px; color: #d7e3f0; }
+  .pill { display: inline-block; background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; font-size: 12px; color: var(--muted); margin: 2px 4px 2px 0; }
+  .bug { border-left: 4px solid var(--warn); }
+  footer { margin-top: 28px; border-top: 1px solid var(--line); padding-top: 12px; color: var(--muted); font-size: 12px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+</style>
+</head>
+<body>
+<div class="sheet">
+  <header>
+    <div class="tag">Wawekit · Module 03</div>
+    <h1>Molecule Viewer — Making Chemistry Visible</h1>
+    <div class="sub">2D structure thumbnails in every table row + a selection-driven Structure panel, all theme-aware and vector-crisp.</div>
+  </header>
+
+  <h2>Rendering Flow (one renderer, two consumers)</h2>
+  <div class="card">
+    <div class="prow">
+      <div class="node n-svc" style="flex:2">
+        <b>services/rendering · render_svg(mol, w, h, dark, legend)</b>
+        <span>pure RDKit → SVG string · copies mol (never mutates records) · Compute2DCoords when SMILES-born · SetDarkMode palette · transparent background</span>
+      </div>
+    </div>
+    <div class="down">▲ same function will feed PDF reports (Module 14) &nbsp;·&nbsp; consumed by ▼</div>
+    <div class="prow">
+      <div class="node n-gui">
+        <b>StructureDelegate</b>
+        <span>QStyledItemDelegate paints thumbnails in the table · pixmap cache keyed by SMILES+theme · 2× HiDPI · only visible cells render</span>
+      </div>
+      <div class="node n-gui">
+        <b>StructureViewerPanel</b>
+        <span>QSvgWidget (vector = crisp at any size) · name/formula/SMILES · SDF properties table · Copy SMILES · Save SVG/PNG</span>
+      </div>
+    </div>
+    <div class="down">selection: table <code>selection_changed(record)</code> → viewer &nbsp;·&nbsp; theme: <code>ThemeManager.theme_changed</code> → both re-render</div>
+  </div>
+
+  <h2>Key Ideas</h2>
+  <div class="grid cols-2">
+    <div class="card">
+      <b>RDKit concepts</b>
+      <ul class="clean">
+        <li><b>2D coordinates</b> — SMILES-born mols have none; <code>rdDepictor.Compute2DCoords</code> lays them out</li>
+        <li><b>PrepareAndDrawMolecule</b> — kekulization + wedges done right</li>
+        <li><b>SetDarkMode</b> — black bonds are invisible on dark themes</li>
+        <li><b>Draw a copy</b> — records are shared; renderers must not mutate</li>
+      </ul>
+    </div>
+    <div class="card">
+      <b>Qt concepts</b>
+      <ul class="clean">
+        <li><b>QStyledItemDelegate</b> — custom painting inside Model/View cells</li>
+        <li><b>Custom data roles</b> — <code>RECORD_ROLE</code> hands the domain object to the delegate</li>
+        <li><b>QSvgWidget / QSvgRenderer</b> — vector display + rasterized export</li>
+        <li><b>Observer pattern</b> — ThemeManager became a QObject with a signal</li>
+        <li><b>toggleViewAction()</b> — free, self-syncing dock show/hide actions</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>A Real Bug the Tests Caught</h2>
+  <div class="card bug">
+    <b>Reverse-order table</b> — <code>setSortingEnabled(True)</code> immediately applies the header's
+    <i>default</i> sort indicator, which is column 0 <b>descending</b>. Every loaded file would have
+    displayed upside-down. Caught by the selection-signal test; fixed with an explicit
+    <code>sortByColumn(0, AscendingOrder)</code>. Lesson: tests that assert on <i>which</i> object
+    comes back — not just that something comes back — catch ordering bugs.
+  </div>
+
+  <h2>Engineering Decisions</h2>
+  <div class="card">
+    <span class="pill">renderer in services, not gui (reused for reports)</span>
+    <span class="pill">render-on-demand + cache (100k rows stay smooth)</span>
+    <span class="pill">SVG everywhere; rasterize only at export</span>
+    <span class="pill">panel translates Qt selection → domain object</span>
+    <span class="pill">depiction failure logs, never crashes painting</span>
+    <span class="pill">verified: 31 tests · ruff · black</span>
+  </div>
+
+  <footer>
+    <span>Wawekit v0.1.0 · Module 3 of 20 · Python 3.13 · RDKit · PySide6</span>
+    <span>MIT License · Graphical abstract</span>
+  </footer>
+</div>
+</body>
+</html>

@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wawekit · Module 1 — Project Architecture (Graphical Abstract)</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #1a1d23; --panel2: #22262e; --line: #2f343d;
+    --text: #e7e9ee; --muted: #a3abb8; --accent: #4f8cc9; --accent2: #6fbf73;
+    --core: #b072d6; --model: #6fbf73; --service: #e0a458; --gui: #4f8cc9;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+    line-height: 1.5; padding: 32px;
+  }
+  .sheet { max-width: 1000px; margin: 0 auto; }
+  header { border-bottom: 2px solid var(--line); padding-bottom: 16px; margin-bottom: 24px; }
+  .tag { color: var(--accent); font-weight: 700; letter-spacing: .08em; font-size: 13px; text-transform: uppercase; }
+  h1 { margin: 6px 0 4px; font-size: 28px; }
+  .sub { color: var(--muted); font-size: 15px; }
+  h2 { font-size: 16px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 28px 0 12px; }
+  .grid { display: grid; gap: 16px; }
+  .cols-2 { grid-template-columns: 1fr 1fr; }
+  @media (max-width: 720px) { .cols-2 { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+
+  /* Layer stack */
+  .layers { display: flex; flex-direction: column; gap: 8px; }
+  .layer { border-radius: 8px; padding: 12px 16px; border: 1px solid var(--line); position: relative; }
+  .layer b { font-size: 15px; }
+  .layer span { color: var(--muted); font-size: 13px; }
+  .l-gui { background: linear-gradient(90deg, rgba(79,140,201,.22), transparent); border-left: 4px solid var(--gui); }
+  .l-service { background: linear-gradient(90deg, rgba(224,164,88,.20), transparent); border-left: 4px solid var(--service); }
+  .l-model { background: linear-gradient(90deg, rgba(111,191,115,.20), transparent); border-left: 4px solid var(--model); }
+  .l-core { background: linear-gradient(90deg, rgba(176,114,214,.22), transparent); border-left: 4px solid var(--core); }
+  .arrow { text-align: center; color: var(--muted); font-size: 12px; margin: 2px 0; }
+
+  /* Startup flow */
+  .flow { display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch; }
+  .step { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; font-size: 13px; flex: 1 1 120px; }
+  .step .n { color: var(--accent); font-weight: 700; margin-right: 6px; }
+
+  ul.clean { margin: 0; padding-left: 18px; }
+  ul.clean li { margin: 4px 0; color: var(--muted); }
+  ul.clean li b { color: var(--text); }
+  code { background: var(--panel2); padding: 1px 6px; border-radius: 4px; font-size: 13px; color: #d7e3f0; }
+  footer { margin-top: 28px; border-top: 1px solid var(--line); padding-top: 12px; color: var(--muted); font-size: 12px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+  .pill { display: inline-block; background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; font-size: 12px; color: var(--muted); margin: 2px 4px 2px 0; }
+</style>
+</head>
+<body>
+<div class="sheet">
+  <header>
+    <div class="tag">Wawekit · Module 01</div>
+    <h1>Project Architecture — the Walking Skeleton</h1>
+    <div class="sub">A launchable, empty-but-professional desktop shell with the infrastructure every future module reuses.</div>
+  </header>
+
+  <h2>The Problem &amp; The Approach</h2>
+  <div class="grid cols-2">
+    <div class="card">
+      <b>Problem</b>
+      <ul class="clean">
+        <li>A 20-module app built ad-hoc rots into an unmaintainable single-file script.</li>
+        <li>Every module would otherwise re-invent logging, config, paths, and window plumbing.</li>
+        <li>Science tangled with UI is impossible to test or publish from.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <b>Approach — Layered "walking skeleton"</b>
+      <ul class="clean">
+        <li>Ship an end-to-end runnable app with <b>zero features</b> first.</li>
+        <li>Enforce a <b>strict downward dependency rule</b> between layers.</li>
+        <li>Build shared infrastructure once; grow features into it.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>Layered Architecture (dependencies point downward only)</h2>
+  <div class="card">
+    <div class="layers">
+      <div class="layer l-gui"><b>gui</b> &nbsp;— PySide6 windows &amp; widgets &nbsp;<span>MainWindow, ThemeManager, QSS themes</span></div>
+      <div class="arrow">▼ may import</div>
+      <div class="layer l-service"><b>services</b> &nbsp;— orchestration &amp; background workers &nbsp;<span>(grows Module 2+)</span></div>
+      <div class="arrow">▼ may import</div>
+      <div class="layer l-model"><b>models</b> &nbsp;— RDKit-backed domain objects &nbsp;<span>no Qt (grows Module 2+)</span></div>
+      <div class="arrow">▼ may import</div>
+      <div class="layer l-core"><b>core</b> &nbsp;— constants · paths · config · logging &nbsp;<span>imports nothing above it</span></div>
+    </div>
+  </div>
+
+  <h2>Startup Sequence (composition root: <code>app.run()</code>)</h2>
+  <div class="flow">
+    <div class="step"><span class="n">1</span>QApplication + identity</div>
+    <div class="step"><span class="n">2</span>Ensure OS dirs</div>
+    <div class="step"><span class="n">3</span>Load config (TOML)</div>
+    <div class="step"><span class="n">4</span>Init logging</div>
+    <div class="step"><span class="n">5</span>Apply theme</div>
+    <div class="step"><span class="n">6</span>Show MainWindow</div>
+    <div class="step"><span class="n">7</span>Run event loop</div>
+  </div>
+
+  <h2>What Was Built</h2>
+  <div class="grid cols-2">
+    <div class="card">
+      <b>Infrastructure (core)</b>
+      <ul class="clean">
+        <li><b>constants</b> — app identity in one place</li>
+        <li><b>paths</b> — cross-platform dirs via <code>QStandardPaths</code></li>
+        <li><b>config</b> — frozen <code>AppConfig</code> dataclass + layered TOML</li>
+        <li><b>logging</b> — console + rotating file, idempotent</li>
+      </ul>
+    </div>
+    <div class="card">
+      <b>Desktop shell (gui)</b>
+      <ul class="clean">
+        <li><b>MainWindow</b> — menus, toolbar, status bar, dock</li>
+        <li><b>Shared QActions</b> — one action drives menu + toolbar</li>
+        <li><b>ThemeManager</b> — runtime dark/light via QSS</li>
+        <li><b>About dialog</b>, DI of config + theme manager</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>Key Engineering Decisions</h2>
+  <div class="card">
+    <span class="pill">src-layout package</span>
+    <span class="pill">composition root</span>
+    <span class="pill">dependency injection (no globals)</span>
+    <span class="pill">frozen dataclass config</span>
+    <span class="pill">importlib.resources for assets</span>
+    <span class="pill">fail-safe config &amp; theme loading</span>
+    <span class="pill">offscreen pytest-qt smoke tests</span>
+    <span class="pill">MIT + full OSS governance</span>
+  </div>
+
+  <footer>
+    <span>Wawekit v0.1.0 · Module 1 of 20 · Python 3.12 · RDKit · PySide6</span>
+    <span>MIT License · Graphical abstract</span>
+  </footer>
+</div>
+</body>
+</html>
