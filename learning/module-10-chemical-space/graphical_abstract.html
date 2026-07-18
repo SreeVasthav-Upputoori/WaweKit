@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wawekit · Module 10 — Chemical Space (Graphical Abstract)</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #1a1d23; --panel2: #22262e; --line: #2f343d;
+    --text: #e7e9ee; --muted: #a3abb8; --accent: #4f8cc9;
+    --service: #e0a458; --gui: #4f8cc9; --link: #6fbf73;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif; line-height: 1.5; padding: 32px; }
+  .sheet { max-width: 1000px; margin: 0 auto; }
+  header { border-bottom: 2px solid var(--line); padding-bottom: 16px; margin-bottom: 24px; }
+  .tag { color: var(--accent); font-weight: 700; letter-spacing: .08em; font-size: 13px; text-transform: uppercase; }
+  h1 { margin: 6px 0 4px; font-size: 27px; }
+  .sub { color: var(--muted); font-size: 15px; }
+  h2 { font-size: 16px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 28px 0 12px; }
+  .grid { display: grid; gap: 16px; }
+  .cols-2 { grid-template-columns: 1fr 1fr; }
+  @media (max-width: 720px) { .cols-2 { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  .pipe { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .step { background: var(--panel2); border: 1px solid var(--line); border-left: 4px solid var(--service); border-radius: 8px; padding: 8px 12px; font-size: 13px; }
+  .step b { display:block; }
+  .step span { color: var(--muted); font-size: 12px; }
+  .arrow { color: var(--muted); font-size: 18px; }
+  .linkbox { border: 1px solid var(--line); border-radius: 10px; padding: 14px; background: var(--panel2); }
+  .linkrow { display:flex; align-items:center; justify-content:center; gap:14px; flex-wrap:wrap; }
+  .chip { border:1px solid var(--line); border-radius: 8px; padding: 8px 14px; font-size: 13px; background: var(--panel); }
+  .bi { color: var(--link); font-weight: 700; }
+  ul.clean { margin: 0; padding-left: 18px; }
+  ul.clean li { margin: 4px 0; color: var(--muted); }
+  ul.clean li b { color: var(--text); }
+  .pill { display:inline-block; background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; font-size: 12px; color: var(--muted); margin: 2px 4px 2px 0; }
+  footer { margin-top: 28px; border-top: 1px solid var(--line); padding-top: 12px; color: var(--muted); font-size: 12px; display:flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+</style>
+</head>
+<body>
+<div class="sheet">
+  <header>
+    <div class="tag">Wawekit · Module 10</div>
+    <h1>Chemical Space — the Dataset as a Map</h1>
+    <div class="sub">Fingerprints → PCA / t-SNE → an interactive scatter, coloured by property and linked both ways to the table.</div>
+  </header>
+
+  <h2>Pipeline</h2>
+  <div class="card">
+    <div class="pipe">
+      <div class="step"><b>Ensure fingerprints</b><span>reuse Module 6 · same encoding for all</span></div>
+      <span class="arrow">→</span>
+      <div class="step"><b>Bit matrix</b><span>ConvertToNumpyArray → (n × n_bits)</span></div>
+      <span class="arrow">→</span>
+      <div class="step"><b>PCA / t-SNE</b><span>sklearn (lazy import) → 2D coords</span></div>
+      <span class="arrow">→</span>
+      <div class="step"><b>Scatter</b><span>Matplotlib canvas + toolbar (pan/zoom/export)</span></div>
+    </div>
+  </div>
+
+  <h2>The two-way link (and the loop it avoids)</h2>
+  <div class="linkbox">
+    <div class="linkrow">
+      <div class="chip">Plot: click / lasso → <span class="bi">points_selected</span></div>
+      <div class="chip">→ table.select_records → Structure &amp; Conformer panels follow</div>
+    </div>
+    <div class="linkrow" style="margin-top:8px;">
+      <div class="chip">Table selection → <span class="bi">highlight_records</span> (rings points)</div>
+      <div class="chip">no signal emitted → no cycle</div>
+    </div>
+    <p style="color:var(--muted); font-size:12.5px; margin:10px 0 0; text-align:center;">The "display" path (highlight, redraws in place, keeps zoom) is kept strictly separate from the "intent" path (emit) — that separation is what makes bidirectional linking safe.</p>
+  </div>
+
+  <h2>Key Ideas</h2>
+  <div class="grid cols-2">
+    <div class="card">
+      <b>Method / science</b>
+      <ul class="clean">
+        <li><b>PCA</b> — fast, deterministic, axes report variance ("46% shown")</li>
+        <li><b>t-SNE</b> — clusters separate; axes unitless; perplexity clamped to n</li>
+        <li><b>Colour-by</b> — any descriptor or similarity; missing = grey, not zero</li>
+        <li><b>Skipped molecules</b> reported, never silently dropped</li>
+      </ul>
+    </div>
+    <div class="card">
+      <b>Software design</b>
+      <ul class="clean">
+        <li><b>Projection is relational</b> → lives in the service, never cached on records</li>
+        <li><b>Lazy sklearn import</b> — no startup cost until first projection</li>
+        <li><b>Matplotlib toolbar</b> = free PNG/PDF/SVG export for papers</li>
+        <li><b>matplotlib + sklearn promoted</b> to core deps (Modules 10–11 need them)</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>Result</h2>
+  <div class="card">
+    <span class="pill">20 molecules · PCA · 46% variance · coloured by LogP</span>
+    <span class="pill">hover tooltip · click + lasso select · table↔plot rings</span>
+    <span class="pill">dark + light, viridis colourbar</span>
+    <span class="pill">verified: 212 tests · ruff · black · -W error</span>
+  </div>
+
+  <footer>
+    <span>Wawekit v0.1.0 · Module 10 of 20 · Python 3.13 · RDKit · PySide6 · scikit-learn · Matplotlib</span>
+    <span>MIT License · Graphical abstract</span>
+  </footer>
+</div>
+</body>
+</html>

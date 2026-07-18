@@ -13,9 +13,10 @@ Loading strategy (layered, last-wins):
 2. Shipped defaults in ``config/default_settings.toml`` (optional).
 3. User overrides in ``<config_dir>/settings.toml`` (optional).
 
-Reading TOML uses the standard-library :mod:`tomllib` (Python 3.11+), so we add
-no dependency. Writing settings back is intentionally deferred to Module 15
-(Settings); Module 1 only needs to *read* configuration.
+Reading TOML uses the standard-library :mod:`tomllib` (Python 3.11+). Writing
+(added in Module 15) is a tiny hand-rolled serializer — the config is a flat
+table of strings, ints and bools, so a real TOML-writer dependency would be
+overkill. That keeps the whole config subsystem dependency-free.
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ from dataclasses import asdict, dataclass, fields, replace
 from pathlib import Path
 from typing import Any
 
-from wawekit.core.paths import config_dir
+from wawekit.core.paths import config_dir, ensure_dir
 
 logger = logging.getLogger(__name__)
 
@@ -112,3 +113,41 @@ def load_config(shipped_defaults: Path | None = None) -> AppConfig:
 
     logger.debug("Loaded configuration: %s", config)
     return config
+
+
+def _toml_value(value: Any) -> str:
+    """Serialize one scalar to its TOML literal.
+
+    ``bool`` is checked before ``int`` because ``bool`` is a subclass of ``int``
+    and ``True`` must become ``true``, not ``1``.
+    """
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def save_config(config: AppConfig, path: Path | None = None) -> Path:
+    """Write ``config`` to the user settings file and return the path written.
+
+    Parameters
+    ----------
+    config:
+        The configuration to persist.
+    path:
+        Target file; defaults to ``<config_dir>/settings.toml``.
+
+    Returns
+    -------
+    Path
+        The file that was written.
+
+    """
+    target = path or (config_dir() / "settings.toml")
+    ensure_dir(target.parent)
+    lines = ["# Wawekit user settings — written by the Settings dialog.\n"]
+    lines += [f"{f.name} = {_toml_value(getattr(config, f.name))}" for f in fields(AppConfig)]
+    target.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    logger.info("Saved configuration to %s", target)
+    return target

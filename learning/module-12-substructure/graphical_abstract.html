@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wawekit · Module 12 — Substructure Search (Graphical Abstract)</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #1a1d23; --panel2: #22262e; --line: #2f343d;
+    --text: #e7e9ee; --muted: #a3abb8; --accent: #4f8cc9;
+    --model: #6fbf73; --service: #e0a458; --gui: #4f8cc9; --hl: #e0724f;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif; line-height: 1.5; padding: 32px; }
+  .sheet { max-width: 1000px; margin: 0 auto; }
+  header { border-bottom: 2px solid var(--line); padding-bottom: 16px; margin-bottom: 24px; }
+  .tag { color: var(--accent); font-weight: 700; letter-spacing: .08em; font-size: 13px; text-transform: uppercase; }
+  h1 { margin: 6px 0 4px; font-size: 27px; }
+  .sub { color: var(--muted); font-size: 15px; }
+  h2 { font-size: 16px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 28px 0 12px; }
+  .grid { display: grid; gap: 16px; }
+  .cols-2 { grid-template-columns: 1fr 1fr; }
+  @media (max-width: 720px) { .cols-2 { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  .flow { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .node { border:1px solid var(--line); border-radius:8px; padding:8px 12px; font-size:13px; background:var(--panel2); }
+  .node b { display:block; }
+  .node span { color: var(--muted); font-size:12px; }
+  .arrow { color: var(--muted); font-size:18px; }
+  code { background: var(--panel2); padding: 1px 6px; border-radius: 4px; font-size: 12.5px; color: #d7e3f0; }
+  .key { font-family: ui-monospace, monospace; font-size: 12.5px; background: var(--panel2); border:1px solid var(--line); border-radius:6px; padding:8px 12px; display:inline-block; }
+  ul.clean { margin: 0; padding-left: 18px; }
+  ul.clean li { margin: 4px 0; color: var(--muted); }
+  ul.clean li b { color: var(--text); }
+  .pill { display:inline-block; background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; font-size: 12px; color: var(--muted); margin: 2px 4px 2px 0; }
+  .hl { color: var(--hl); font-weight:700; }
+  footer { margin-top: 28px; border-top: 1px solid var(--line); padding-top: 12px; color: var(--muted); font-size: 12px; display:flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+</style>
+</head>
+<body>
+<div class="sheet">
+  <header>
+    <div class="tag">Wawekit · Module 12</div>
+    <h1>Substructure Search — Find the Fragment, <span class="hl">Show Where</span></h1>
+    <div class="sub">SMARTS / SMILES query → matched-atom highlighting in thumbnails + the Structure panel. The first feature that extends the 2D renderer.</div>
+  </header>
+
+  <h2>Flow</h2>
+  <div class="card">
+    <div class="flow">
+      <div class="node"><b>Query dialog</b><span>SMARTS / SMILES · live-validated</span></div>
+      <span class="arrow">→</span>
+      <div class="node"><b>GetSubstructMatches</b><span>matched atom indices per molecule</span></div>
+      <span class="arrow">→</span>
+      <div class="node"><b>SubstructureHit</b><span>cached on record · carries its query</span></div>
+      <span class="arrow">→</span>
+      <div class="node"><b class="hl">highlight</b><span>thumbnails + Structure panel + ✓/— column</span></div>
+    </div>
+  </div>
+
+  <h2>The renderer change (small, shared)</h2>
+  <div class="card">
+    <p style="margin:0 0 8px;"><code>render_svg(mol, …, highlight_atoms=None)</code> — one optional arg. It computes the bonds within the matched atom set so a ring reads as one region, and passes <code>highlightAtoms</code>+<code>highlightBonds</code> to RDKit.</p>
+    <ul class="clean">
+      <li>Input mol still <b>never mutated</b> (draws a copy — tested)</li>
+      <li>Default path byte-for-byte unchanged</li>
+      <li>Lives in <code>services</code> → lights up <b>both</b> views, zero per-widget drawing code</li>
+    </ul>
+  </div>
+
+  <h2>Highlighting through the thumbnail cache</h2>
+  <div class="card">
+    <p style="margin:0 0 8px;">The fix for stale thumbnails: fold the match into the cache key.</p>
+    <div class="key">key = (canonical SMILES, sorted matched-atoms tuple | None)</div>
+    <p style="color:var(--muted); font-size:13px; margin:10px 0 0;">Same molecule caches separately with/without a highlight. New search → new key → re-render; clear query → key reverts → plain image from cache. Invalidation falls out of the key — no explicit clearing, no stale frames.</p>
+  </div>
+
+  <h2>Key Ideas</h2>
+  <div class="grid cols-2">
+    <div class="card">
+      <b>Design</b>
+      <ul class="clean">
+        <li><b>A match is relational</b> — SubstructureHit carries its query; stale hits cleared (3rd time this pattern appears)</li>
+        <li><b>searched-no-match (—) ≠ unsearched (blank)</b> — an honesty distinction the sort respects</li>
+        <li><b>4th filter channel</b> — refactored proxy to <code>all(channel.matches …)</code>; cleared on standardize</li>
+      </ul>
+    </div>
+    <div class="card">
+      <b>Reuse (almost everything)</b>
+      <ul class="clean">
+        <li>render_svg · delegate · Structure panel · filter proxy · worker</li>
+        <li><code>parse_query</code> mirrors <code>parse_smiles</code> (mute stderr, return None)</li>
+        <li>live-validation dialog pattern from similarity</li>
+        <li><b>Only new surface: the highlight itself</b></li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>Result</h2>
+  <div class="card">
+    <span class="pill">pyridine query → 3 rings highlighted, benzenes left plain</span>
+    <span class="pill">✓ / — Substructure column</span>
+    <span class="pill">SMARTS &amp; SMILES · live-validated</span>
+    <span class="pill">verified: 232 tests · ruff · black · -W error</span>
+  </div>
+
+  <footer>
+    <span>Wawekit v0.1.0 · Module 12 of 20 · Python 3.13 · RDKit · PySide6</span>
+    <span>MIT License · Graphical abstract</span>
+  </footer>
+</div>
+</body>
+</html>

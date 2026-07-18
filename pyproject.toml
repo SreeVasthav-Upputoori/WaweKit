@@ -29,6 +29,12 @@ dependencies = [
     "rdkit>=2024.3.1",
     "numpy>=1.26",
     "pandas>=2.2",
+    # Chemical-space projection (Module 10) and clustering (Module 11) make these
+    # load-bearing, so they are core rather than optional science extras.
+    "matplotlib>=3.8",
+    "scikit-learn>=1.4",
+    # Report generation (Module 14) — PDF output.
+    "reportlab>=4.1",
 ]
 
 [project.optional-dependencies]
@@ -40,13 +46,10 @@ dev = [
     "ruff>=0.5",
     "mkdocs>=1.6",
 ]
-# Heavier scientific extras added in later modules (plots/ML/export).
+# Heavier scientific extras added in later modules (export/reporting).
 science = [
-    "matplotlib>=3.8",
     "plotly>=5.20",
-    "scikit-learn>=1.4",
     "openpyxl>=3.1",
-    "reportlab>=4.1",
 ]
 
 [project.urls]
@@ -70,6 +73,9 @@ target-version = ["py312"]
 line-length = 100
 target-version = "py312"
 src = ["src", "tests"]
+# The learning/ folder holds standalone demo scripts and abstracts, not package
+# source — it is documentation, so it is not held to the source lint rules.
+extend-exclude = ["learning"]
 
 [tool.ruff.lint]
 # E/F: pyflakes+pycodestyle, I: isort, UP: pyupgrade, B: bugbear, D: docstrings.

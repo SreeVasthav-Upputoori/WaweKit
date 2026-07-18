@@ -15,6 +15,11 @@ Design notes
 * **Not frozen.** Unlike :class:`~wawekit.core.config.AppConfig`, records cache
   derived values internally, so full immutability is impractical; treat them as
   read-only by convention after creation.
+* **Derived data is one field, not many.** Module 5 added descriptors as a
+  single ``descriptors: DescriptorSet | None`` slot rather than eight loose
+  columns; Module 6 added ``fingerprint`` the same way. Later modules
+  (conformers, scaffolds) attach their results identically, so the record gains
+  one field per *concept* instead of one per *value*.
 """
 
 from __future__ import annotations
@@ -25,6 +30,14 @@ from typing import Any
 
 from rdkit import Chem
 from rdkit.Chem import rdMolDescriptors
+
+from wawekit.models.clustering import ClusterAssignment
+from wawekit.models.conformers import ConformerSet
+from wawekit.models.descriptors import DescriptorSet
+from wawekit.models.fingerprints import Fingerprint
+from wawekit.models.scaffold import ScaffoldResult
+from wawekit.models.similarity import SimilarityScore
+from wawekit.models.substructure import SubstructureHit
 
 
 @dataclass(slots=True)
@@ -46,6 +59,48 @@ class MoleculeRecord:
     properties:
         Data fields attached to the source record (e.g. SDF tags such as
         activity values). Values keep the types RDKit inferred.
+    descriptors:
+        Computed drug-likeness panel, or ``None`` until
+        :func:`~wawekit.services.chemistry.descriptors.compute_descriptors`
+        has run. This is a *cache of derived values*, in the same category as
+        :attr:`smiles` and :attr:`formula` — filling it does not change the
+        molecule. Standardization builds new records, whose ``descriptors``
+        start as ``None`` again, so stale numbers cannot survive a structural
+        edit.
+    fingerprint:
+        Computed bit vector, or ``None`` until
+        :func:`~wawekit.services.chemistry.fingerprints.compute_fingerprints`
+        has run. Same cache discipline as ``descriptors``, with one addition:
+        the fingerprint carries the options that built it, so a run with
+        different parameters replaces it rather than leaving the dataset mixed.
+    similarity:
+        Score against the most recent similarity search, or ``None`` if this
+        record has not been searched (or could not be). Unlike every other
+        derived field here, this one is *not* intrinsic to the molecule: it
+        only means anything relative to a query, so the
+        :class:`~wawekit.models.similarity.SimilarityScore` carries that query
+        with it rather than being a bare float.
+    scaffold:
+        Bemis–Murcko scaffold (exact and generic forms), or ``None`` until
+        :func:`~wawekit.services.chemistry.scaffolds.compute_scaffolds` has run.
+        Same cache discipline as ``descriptors``: intrinsic to the structure, so
+        standardization's new records start with ``None`` again.
+    conformers:
+        Generated 3D conformers, or ``None`` until
+        :func:`~wawekit.services.chemistry.conformers.generate_conformers` has
+        run. The 3D geometry lives on
+        :attr:`~wawekit.models.conformers.ConformerSet.mol_3d`, a *separate*
+        molecule, so ``mol`` stays 2D for the table and Structure panel.
+    cluster:
+        Cluster membership from the most recent clustering run, or ``None`` if
+        this record has not been clustered. Like ``similarity`` and unlike the
+        intrinsic caches, it is dataset-relative, so the assignment carries the
+        :class:`~wawekit.models.clustering.ClusterRun` that produced it.
+    substructure_match:
+        Result of the most recent substructure search (matched atoms + query),
+        or ``None`` if not searched. Query-relative, so the
+        :class:`~wawekit.models.substructure.SubstructureHit` carries its query;
+        its matched atoms drive highlighting in the structure views.
 
     """
 
@@ -54,6 +109,13 @@ class MoleculeRecord:
     source: Path | None = None
     index_in_source: int = 0
     properties: dict[str, Any] = field(default_factory=dict)
+    descriptors: DescriptorSet | None = None
+    fingerprint: Fingerprint | None = None
+    similarity: SimilarityScore | None = None
+    scaffold: ScaffoldResult | None = None
+    conformers: ConformerSet | None = None
+    cluster: ClusterAssignment | None = None
+    substructure_match: SubstructureHit | None = None
 
     # Lazily-computed caches (excluded from __init__ and repr).
     _smiles: str | None = field(default=None, init=False, repr=False)

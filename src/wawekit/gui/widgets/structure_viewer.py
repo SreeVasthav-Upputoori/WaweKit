@@ -121,6 +121,10 @@ class StructureViewerPanel(QWidget):
             self._dark = dark
             self._update_ui()
 
+    def refresh(self) -> None:
+        """Re-render the current molecule (e.g. after a substructure search)."""
+        self._update_ui()
+
     @property
     def record(self) -> MoleculeRecord | None:
         """The record currently displayed (``None`` when showing placeholder)."""
@@ -146,8 +150,12 @@ class StructureViewerPanel(QWidget):
         self._formula_label.setText(f"{record.formula}   ·   {record.num_heavy_atoms} heavy atoms")
         self._smiles_label.setText(record.smiles)
 
+        hit = record.substructure_match
+        highlight = sorted(hit.atoms) if hit is not None and hit.is_match else None
         try:
-            self._svg_text = render_svg(record.mol, _RENDER_W, _RENDER_H, dark=self._dark)
+            self._svg_text = render_svg(
+                record.mol, _RENDER_W, _RENDER_H, dark=self._dark, highlight_atoms=highlight
+            )
         except Exception:  # noqa: BLE001 — depiction failure must not break selection
             logger.exception("Failed to render structure for %s", record.name)
             self._placeholder.setText("Could not render this structure\n(see log file).")

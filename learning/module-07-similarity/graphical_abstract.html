@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wawekit · Module 7 — Similarity Search (Graphical Abstract)</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #1a1d23; --panel2: #22262e; --line: #2f343d;
+    --text: #e7e9ee; --muted: #a3abb8; --accent: #4f8cc9;
+    --model: #6fbf73; --service: #e0a458; --gui: #4f8cc9; --warn: #d6a05a;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif; line-height: 1.5; padding: 32px; }
+  .sheet { max-width: 1000px; margin: 0 auto; }
+  header { border-bottom: 2px solid var(--line); padding-bottom: 16px; margin-bottom: 24px; }
+  .tag { color: var(--accent); font-weight: 700; letter-spacing: .08em; font-size: 13px; text-transform: uppercase; }
+  h1 { margin: 6px 0 4px; font-size: 28px; }
+  .sub { color: var(--muted); font-size: 15px; }
+  h2 { font-size: 16px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 28px 0 12px; }
+  .grid { display: grid; gap: 16px; }
+  .cols-2 { grid-template-columns: 1fr 1fr; }
+  .cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+  @media (max-width: 720px) { .cols-2, .cols-3 { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  .card h3 { margin: 0 0 8px; font-size: 14px; }
+  .flow { display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch; }
+  .step { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; font-size: 13px; flex: 1; min-width: 150px; }
+  .step.gui { border-left: 4px solid var(--gui); }
+  .step.service { border-left: 4px solid var(--service); }
+  .step.model { border-left: 4px solid var(--model); }
+  .step b { display:block; }
+  .step span { color: var(--muted); font-size: 12px; }
+  .arrow { color: var(--muted); font-size: 18px; align-self: center; }
+  table.demo { width:100%; border-collapse: collapse; font-size: 13px; }
+  table.demo td, table.demo th { border: 1px solid var(--line); padding: 6px 10px; text-align: left; }
+  table.demo th { color: var(--muted); font-weight: 600; }
+  table.demo td.num { text-align: right; font-variant-numeric: tabular-nums; color: #cfe0f0; }
+  table.demo tr.query td { background: #1f2a35; }
+  table.demo tr.query td.num { color: #fff; font-weight: 700; }
+  .bar { display:inline-block; height: 8px; border-radius: 2px; background: var(--accent); vertical-align: middle; }
+  code { background: var(--panel2); padding: 1px 6px; border-radius: 4px; font-size: 12.5px; color: #d7e3f0; }
+  ul.clean { margin: 0; padding-left: 18px; }
+  ul.clean li { margin: 4px 0; color: var(--muted); }
+  ul.clean li b { color: var(--text); }
+  .pill { display:inline-block; background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; font-size: 12px; color: var(--muted); margin: 2px 4px 2px 0; }
+  .legend { font-size: 12px; color: var(--muted); margin-top: 8px; }
+  .dot { display:inline-block; width:10px; height:10px; border-radius:2px; margin: 0 4px 0 10px; vertical-align: middle; }
+  .bad { color: #e08a8a; }
+  .good { color: var(--model); }
+  .formula { text-align:center; font-size: 15px; padding: 6px 0; }
+  .big { text-align:center; font-size: 19px; padding: 10px 0; }
+  footer { margin-top: 28px; border-top: 1px solid var(--line); padding-top: 12px; color: var(--muted); font-size: 12px; display:flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+</style>
+</head>
+<body>
+<div class="sheet">
+  <header>
+    <div class="tag">Wawekit · Module 07</div>
+    <h1>Similarity Search — Finding More Like This One</h1>
+    <div class="sub">Pick a query molecule, rank the whole dataset against it, and never trust a number whose context you can't see. The payoff for Module 6's bit vectors.</div>
+  </header>
+
+  <h2>The Core Idea</h2>
+  <div class="card">
+    <div class="big">
+      Tanimoto(A, B) = |A ∧ B| / |A ∨ B| &nbsp;→&nbsp; one query, <b>one C++ call</b>, a ranked list
+    </div>
+    <div class="legend" style="text-align:center">
+      <code>BulkTanimotoSimilarity(query, [all])</code> crosses the Python↔C++ boundary <b>once</b> for the entire dataset and loops in C++ — not once per molecule. This is why Module 6 kept RDKit's native <code>ExplicitBitVect</code> instead of converting to numpy: bulk eats it directly, no conversion step.
+    </div>
+  </div>
+
+  <h2>The Real Result (samples/demo_similarity.smi, Tanimoto · Morgan r2 · 2048b)</h2>
+  <div class="card">
+    <table class="demo">
+      <tr><th>Rank</th><th>Molecule</th><th>Score</th><th style="width:45%"></th></tr>
+      <tr class="query"><td>1</td><td><b>aspirin</b> — the query</td><td class="num">1.000</td><td><span class="bar" style="width:100%"></span></td></tr>
+      <tr><td>2</td><td>salicylic-acid</td><td class="num">0.448</td><td><span class="bar" style="width:44.8%"></span></td></tr>
+      <tr><td>3</td><td>benzoic-acid</td><td class="num">0.357</td><td><span class="bar" style="width:35.7%"></span></td></tr>
+      <tr><td>4</td><td>methyl-salicylate</td><td class="num">0.353</td><td><span class="bar" style="width:35.3%"></span></td></tr>
+      <tr><td>5</td><td>ethyl-salicylate</td><td class="num">0.324</td><td><span class="bar" style="width:32.4%"></span></td></tr>
+      <tr><td>…</td><td>paracetamol</td><td class="num">0.222</td><td><span class="bar" style="width:22.2%"></span></td></tr>
+      <tr><td>12</td><td>caffeine</td><td class="num">0.089</td><td><span class="bar" style="width:8.9%"></span></td></tr>
+      <tr><td>13</td><td>glucose</td><td class="num">0.025</td><td><span class="bar" style="width:2.5%"></span></td></tr>
+    </table>
+    <div class="legend">The salicylates rank top, the other drugs mid, the sugar last — the chemistry is sane. Note <b>0.448</b> for salicylic acid, aspirin minus one acetyl group: real-world "similar" scores are far lower than intuition suggests. The 0.85 threshold you read in papers is <i>very</i> strict.</div>
+  </div>
+
+  <h2>The Design Fork: a similarity is not a property of a molecule</h2>
+  <div class="grid cols-2">
+    <div class="card">
+      <h3><span class="good">Intrinsic</span> — Modules 5 &amp; 6</h3>
+      <div class="formula"><code>MW = 180.16</code></div>
+      <ul class="clean">
+        <li>Depends on the structure and <b>nothing else</b>.</li>
+        <li>Recompute tomorrow → same answer.</li>
+        <li>A bare number is a complete fact.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3><span class="bad">Relational</span> — Module 7</h3>
+      <div class="formula"><code>0.448</code> &nbsp;←&nbsp; meaningless alone</div>
+      <ul class="clean">
+        <li>0.448 <b>against aspirin</b>, <b>by Tanimoto</b>, <b>on Morgan r2 · 2048b</b>.</li>
+        <li>Change any of those three and the number changes — while looking just as plausible.</li>
+        <li>So <code>SimilarityScore</code> refuses to be a bare float: it <b>carries its query</b>.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="legend">Same discipline as Module 6's <code>Fingerprint</code> carrying its options: <b>a derived number travels with the context that makes it true.</b> The table cell shows 0.448; the tooltip shows "Tanimoto vs aspirin · Morgan r2 · 2048b". You cannot read the score without its context being one hover away.</div>
+
+  <h2>Data Flow</h2>
+  <div class="flow">
+    <div class="step gui"><b>SimilarityDialog</b><span>query: selected row or pasted SMILES (validated live) + metric + encoding</span></div>
+    <div class="arrow">→</div>
+    <div class="step service"><b>compute_fingerprints</b><span>encode dataset on the chosen options — reuses matching, recomputes mismatched</span></div>
+    <div class="arrow">→</div>
+    <div class="step service"><b>Bulk*Similarity</b><span>one C++ call, whole dataset</span></div>
+    <div class="arrow">→</div>
+    <div class="step model"><b>SimilarityScore</b><span>cached on each record, carrying its SimilarityQuery</span></div>
+    <div class="arrow">→</div>
+    <div class="step gui"><b>Similarity column</b><span>sorted desc, query row bold, scrolled into view</span></div>
+  </div>
+  <div class="legend">
+    <span class="dot" style="background:var(--gui)"></span>gui
+    <span class="dot" style="background:var(--service)"></span>services
+    <span class="dot" style="background:var(--model)"></span>models
+    &nbsp;— dependencies point downward only. The dialog never imports RDKit: pasted SMILES go through <code>parse_smiles</code> in the loader service.
+  </div>
+
+  <h2>The Bug This Module Exists To Prevent</h2>
+  <div class="card">
+    <p style="margin:0 0 10px; color:var(--muted); font-size:13.5px">RDKit guards exactly one thing: <b>bit length</b>. Aspirin vs salicylic acid, all measured:</p>
+    <table class="demo">
+      <tr><th>Compared</th><th>Same length?</th><th>RDKit says</th><th>Verdict</th></tr>
+      <tr><td>Morgan r2 <b>vs Morgan r2</b></td><td>yes</td><td class="num">0.448</td><td class="good">the truth</td></tr>
+      <tr><td>Morgan 2048 vs MACCS 167</td><td><b>no</b></td><td><code>ValueError</code></td><td class="good">loud, obvious, safe</td></tr>
+      <tr><td>Morgan r2 vs Morgan r3</td><td>yes</td><td class="num">0.394</td><td class="bad">silent · plausible · wrong</td></tr>
+      <tr><td>Morgan r2 vs RDKit path</td><td>yes</td><td class="num">0.005</td><td class="bad">silent · a real hit looks like noise</td></tr>
+      <tr><td>ECFP vs FCFP</td><td>yes</td><td class="num">0.000</td><td class="bad">silent · a close analogue scores zero</td></tr>
+    </table>
+    <div class="legend">The mistake RDKit catches is the one you'd have noticed anyway. The mistake that ships is <b>same length, different meaning</b> — every number above is a float in exactly the range a chemist expects, and only the first means anything. <code>is_comparable_to</code> returns <span class="bad">False</span> for all three silent rows.</div>
+    <div class="grid cols-2" style="margin-top:14px">
+      <div>
+        <ul class="clean">
+          <li><b>Step 1</b> — encode the query with the <i>same</i> options as the dataset, never with defaults.</li>
+          <li><b>Step 2</b> — check every record with <code>is_comparable_to</code> anyway, and refuse the failures.</li>
+        </ul>
+      </div>
+      <div>
+        <ul class="clean">
+          <li>Step 2 <b>looks</b> redundant after step 1. It isn't — and we only found out by writing the test.</li>
+          <li><code>compute_fingerprints</code> overwrites a vector <b>only on success</b>. A molecule RDKit throws on <b>keeps its old fingerprint</b>.</li>
+          <li>Re-encode a MACCS dataset as Morgan with one failure → exactly one record is still MACCS. Same field, same type, different meaning.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="legend">Cost: one equality check per record. Prevents: a plausible, wrong hit list — the kind of bug that gets a compound synthesized for no reason. Skipped rows go <b>blank</b>, never 0.000: blank means "not compared", 0.000 claims "compared, nothing in common".</div>
+  </div>
+
+  <h2>Three Metrics, One Question</h2>
+  <div class="grid cols-3">
+    <div class="card">
+      <h3>Tanimoto <span class="pill">default</span></h3>
+      <div class="formula"><code>c / (a + b − c)</code></div>
+      <div class="legend">Overlap ÷ union. The field standard — every published "≥ 0.85" threshold assumes it. If unsure, this.</div>
+    </div>
+    <div class="card">
+      <h3>Dice</h3>
+      <div class="formula"><code>2c / (a + b)</code></div>
+      <div class="legend">Counts overlap twice → always ≥ Tanimoto (we test this). Fairer when the two molecules differ a lot in size.</div>
+    </div>
+    <div class="card">
+      <h3>Cosine</h3>
+      <div class="formula"><code>c / √(a·b)</code></div>
+      <div class="legend">The angle between the vectors. Common in chemical-space work and ML.</div>
+    </div>
+  </div>
+
+  <h2>Two Decisions Worth Stealing</h2>
+  <div class="grid cols-2">
+    <div class="card">
+      <h3>No threshold field on the dialog</h3>
+      <ul class="clean">
+        <li>Most tools ask "cutoff?" <b>before</b> you've seen a single score. That's a guess: too high and you re-run, too low and you scroll.</li>
+        <li>Scores land in a <b>sortable column</b>; the Module 5 filter box narrows them <i>afterwards</i> — <code>Sim &gt;= 0.7</code>, interactively, at whatever cutoff turns out to be interesting.</li>
+        <li>One box for <code>MW &lt; 500</code> and <code>Sim &gt;= 0.7</code>. One grammar. <b>Reuse worth having removes a control, not just code.</b></li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Extract on the second consumer, not the first</h3>
+      <ul class="clean">
+        <li>Module 6 kept the fingerprint controls inside its dialog — correct: a widget invented for one caller is an abstraction you pay for and don't use.</li>
+        <li>Module 7 <b>is</b> the second caller, so <code>FingerprintOptionsWidget</code> was extracted now: one enable/disable rule, and the <code>QVariant</code> coercion can't be forgotten in the next dialog.</li>
+        <li>Extract when the duplication is <b>real and present</b>, not when it's imagined.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>Found By Looking At The Screen</h2>
+  <div class="grid cols-2">
+    <div class="card">
+      <h3>A checked radio button rendered nothing</h3>
+      <div class="legend">Module 7 is the first to use radios. Qt's native style drew the checked dot invisibly on our backgrounds — unchecked showed a circle, checked showed <b>nothing</b>, so the dialog looked like no option was selected. Invisible to every test; obvious in one screenshot. Fixed with an explicit <code>qradialgradient</code> indicator in both themes.</div>
+    </div>
+    <div class="card">
+      <h3>The result landed off-screen</h3>
+      <div class="legend">The Similarity column sits past the whole descriptor panel. On a normal window, running a search produced <b>no visible change</b> — sorting silently rearranged rows, which is somehow worse than nothing happening. <code>refresh_similarity</code> now ends by scrolling the score into view.</div>
+    </div>
+  </div>
+
+  <h2>Publication Radar</h2>
+  <div class="card">
+    <ul class="clean">
+      <li><b>Bit-collision noise in virtual screening</b> — hashed FPs fold unbounded fragment space into 2048 bits. How much do collisions move real screening rankings, and can we ship a cheap "your bit size is too small for this library" diagnostic? Now directly testable: this module produces the rankings to perturb.</li>
+      <li><b>Standardization-divergence benchmark</b> (Module 4) — still the strongest candidate.</li>
+      <li><b>Per-descriptor reliability flag</b> (Module 5) — still parked, still needs the similarity-to-training signal. <span class="good">Module 7 just built that signal.</span></li>
+    </ul>
+    <div class="legend">Bar to clear: algorithmic novelty, not GUI-wrapping.</div>
+  </div>
+
+  <footer>
+    <div>Wawekit · Module 7 of 20 · Similarity Search</div>
+    <div>173 tests green · ruff + black clean · RDKit 2026.03.4 · PySide6 6.11.1</div>
+  </footer>
+</div>
+</body>
+</html>

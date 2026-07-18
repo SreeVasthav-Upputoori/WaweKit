@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wawekit · Module 8 — Scaffold Analysis (Graphical Abstract)</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #1a1d23; --panel2: #22262e; --line: #2f343d;
+    --text: #e7e9ee; --muted: #a3abb8; --accent: #4f8cc9;
+    --model: #6fbf73; --service: #e0a458; --gui: #4f8cc9;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif; line-height: 1.5; padding: 32px; }
+  .sheet { max-width: 1000px; margin: 0 auto; }
+  header { border-bottom: 2px solid var(--line); padding-bottom: 16px; margin-bottom: 24px; }
+  .tag { color: var(--accent); font-weight: 700; letter-spacing: .08em; font-size: 13px; text-transform: uppercase; }
+  h1 { margin: 6px 0 4px; font-size: 27px; }
+  .sub { color: var(--muted); font-size: 15px; }
+  h2 { font-size: 16px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 28px 0 12px; }
+  .grid { display: grid; gap: 16px; }
+  .cols-2 { grid-template-columns: 1fr 1fr; }
+  @media (max-width: 720px) { .cols-2 { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  .flow { display: flex; flex-direction: column; gap: 6px; }
+  .prow { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .node { border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; background: var(--panel2); font-size: 13px; flex: 1 1 150px; }
+  .node b { display: block; font-size: 14px; margin-bottom: 2px; }
+  .node span { color: var(--muted); font-size: 12px; }
+  .n-gui { border-left: 4px solid var(--gui); }
+  .n-svc { border-left: 4px solid var(--service); }
+  .n-mod { border-left: 4px solid var(--model); }
+  .down { text-align: center; color: var(--muted); font-size: 13px; }
+  table.demo { width:100%; border-collapse: collapse; font-size: 13px; }
+  table.demo td, table.demo th { border: 1px solid var(--line); padding: 6px 10px; text-align: left; }
+  table.demo th { color: var(--muted); font-weight: 600; }
+  code { background: var(--panel2); padding: 1px 6px; border-radius: 4px; font-size: 12.5px; color: #d7e3f0; }
+  ul.clean { margin: 0; padding-left: 18px; }
+  ul.clean li { margin: 4px 0; color: var(--muted); }
+  ul.clean li b { color: var(--text); }
+  .pill { display:inline-block; background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; font-size: 12px; color: var(--muted); margin: 2px 4px 2px 0; }
+  footer { margin-top: 28px; border-top: 1px solid var(--line); padding-top: 12px; color: var(--muted); font-size: 12px; display:flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+</style>
+</head>
+<body>
+<div class="sheet">
+  <header>
+    <div class="tag">Wawekit · Module 08</div>
+    <h1>Scaffold Analysis — Grouping a Library by its Core Skeletons</h1>
+    <div class="sub">Bemis–Murcko decomposition + frequency grouping = scaffold diversity, the first grouping feature — without leaving the flat table.</div>
+  </header>
+
+  <h2>Flow (one compute, two views)</h2>
+  <div class="card">
+    <div class="flow">
+      <div class="prow">
+        <div class="node n-gui" style="flex:2"><b>Chemistry → Analyze Scaffolds</b><span>no dialog — both forms are computed together (descriptors pattern)</span></div>
+      </div>
+      <div class="down">▼ FunctionWorker (background)</div>
+      <div class="prow">
+        <div class="node n-svc"><b>compute_scaffolds</b><span>GetScaffoldForMol + MakeScaffoldGeneric · cache on record in place</span></div>
+        <div class="node n-mod"><b>ScaffoldResult</b><span>murcko_smiles · generic_smiles · has_ring_system</span></div>
+      </div>
+      <div class="down">▼ two consumers of the same cached result</div>
+      <div class="prow">
+        <div class="node n-gui"><b>Scaffold column</b><span>sortable → sorting <i>is</i> grouping; flat table intact</span></div>
+        <div class="node n-gui"><b>Scaffolds panel</b><span>group_scaffolds → ranked thumbnails + diversity headline; click → filter</span></div>
+      </div>
+    </div>
+  </div>
+
+  <h2>The demo set: 15 molecules, grouped</h2>
+  <div class="card">
+    <table class="demo">
+      <tr><th>Representation</th><th>Distinct scaffolds</th><th>Why</th></tr>
+      <tr><td>Murcko (exact)</td><td><b>5</b></td><td>benzene ×4, biphenyl ×3, diphenylmethane ×2, pyridine ×2, acyclic ×4</td></tr>
+      <tr><td>Generic framework</td><td><b>4</b></td><td>benzene + pyridine merge → one all-carbon six-ring (×6); coarser on purpose</td></tr>
+    </table>
+    <p style="color:var(--muted); font-size:13px; margin:10px 0 0;">Acyclic molecules (ethanol, hexane, acids) have <b>no</b> scaffold — surfaced honestly as one <code>(acyclic)</code> group, never crashed on.</p>
+  </div>
+
+  <h2>Key Ideas</h2>
+  <div class="grid cols-2">
+    <div class="card">
+      <b>RDKit / chemistry</b>
+      <ul class="clean">
+        <li><b>GetScaffoldForMol</b> — exact Murcko core</li>
+        <li><b>MakeScaffoldGeneric</b> — all-carbon, single-bond graph</li>
+        <li><b>Acyclic = empty scaffold</b> — the edge case that matters</li>
+        <li><b>Diversity</b> = distinct scaffolds ÷ molecules</li>
+      </ul>
+    </div>
+    <div class="card">
+      <b>Software design</b>
+      <ul class="clean">
+        <li><b>Model in models, compute in services</b> — 5th proof of the seam</li>
+        <li><b>Cache in place</b> — repaint one column, keep scroll/selection</li>
+        <li><b>Panel emits intent</b> — no worker, no RDKit in the widget</li>
+        <li><b>2nd AND-ed filter channel</b> — scaffold click ∧ text query</li>
+        <li><b>View toggle, not compute option</b> — switch with no recompute</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>Traps closed</h2>
+  <div class="card">
+    <span class="pill">acyclic molecules → honest empty scaffold, not a crash</span>
+    <span class="pill">representation switch clears the stale scaffold filter</span>
+    <span class="pill">standardize replaces records → reset the scaffold view</span>
+    <span class="pill">sort by scaffold key, not by a rendered string</span>
+    <span class="pill">verified: 194 tests · ruff · black · -W error</span>
+  </div>
+
+  <footer>
+    <span>Wawekit v0.1.0 · Module 8 of 20 · Python 3.13 · RDKit · PySide6</span>
+    <span>MIT License · Graphical abstract</span>
+  </footer>
+</div>
+</body>
+</html>

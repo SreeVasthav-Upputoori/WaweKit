@@ -50,6 +50,33 @@ QPushButton {
 QPushButton:hover { background-color: #3f4146; }
 QPushButton:pressed { background-color: #3a6ea5; }
 
+/* Radio buttons. Qt's native style draws the *checked* dot in a colour that is
+   invisible against this background — the indicator simply vanishes, so the
+   user cannot tell which option is selected. (Checkboxes are unaffected and are
+   deliberately left native.) Drawing the dot ourselves is the fix: the
+   gradient's hard stop at 0.5 is a filled circle inside the ring, not a fade. */
+QRadioButton::indicator {
+    width: 14px;
+    height: 14px;
+    border: 1px solid #6b6e75;
+    border-radius: 8px;
+    background-color: #1a1b1e;
+}
+QRadioButton::indicator:checked {
+    border: 1px solid #5a9fd8;
+    background-color: qradialgradient(cx: 0.5, cy: 0.5, radius: 0.5,
+                                      fx: 0.5, fy: 0.5,
+                                      stop: 0 #5a9fd8, stop: 0.5 #5a9fd8,
+                                      stop: 0.55 #1a1b1e, stop: 1 #1a1b1e);
+}
+QRadioButton::indicator:disabled {
+    border: 1px solid #3f4146;
+    background-color: #26282c;
+}
+QRadioButton:disabled {
+    color: #6b6e75;
+}
+
 QDockWidget {
     titlebar-close-icon: none;
     border: 1px solid #35373b;

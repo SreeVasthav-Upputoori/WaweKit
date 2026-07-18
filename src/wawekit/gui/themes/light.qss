@@ -51,6 +51,31 @@ QPushButton {
 QPushButton:hover { background-color: #eef0f3; }
 QPushButton:pressed { background-color: #3a6ea5; color: #ffffff; }
 
+/* Radio buttons — drawn explicitly to match the dark theme, where Qt's native
+   checked dot renders invisibly. Kept symmetrical so the two themes agree.
+   (Checkboxes are unaffected and are deliberately left native.) */
+QRadioButton::indicator {
+    width: 14px;
+    height: 14px;
+    border: 1px solid #a8adb5;
+    border-radius: 8px;
+    background-color: #ffffff;
+}
+QRadioButton::indicator:checked {
+    border: 1px solid #3a6ea5;
+    background-color: qradialgradient(cx: 0.5, cy: 0.5, radius: 0.5,
+                                      fx: 0.5, fy: 0.5,
+                                      stop: 0 #3a6ea5, stop: 0.5 #3a6ea5,
+                                      stop: 0.55 #ffffff, stop: 1 #ffffff);
+}
+QRadioButton::indicator:disabled {
+    border: 1px solid #d0d3d8;
+    background-color: #f4f5f7;
+}
+QRadioButton:disabled {
+    color: #a8adb5;
+}
+
 QDockWidget {
     border: 1px solid #d0d3d8;
 }

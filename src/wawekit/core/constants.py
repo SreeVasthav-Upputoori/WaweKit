@@ -19,16 +19,37 @@ APP_SLUG: str = "wawekit"
 
 #: Organization/author name. Used by Qt's QSettings and OS path helpers to
 #: namespace the app's config and data directories.
-ORG_NAME: str = "Wawekit"
+ORG_NAME: str = "TheWaweAI"
 
 #: Short one-line description shown in the About dialog and packaging metadata.
-APP_DESCRIPTION: str = "Professional open-source desktop cheminformatics toolkit."
+APP_DESCRIPTION: str = "Desktop workbench for cheminformatics research"
 
 #: Application version, sourced from the package to avoid duplication.
 APP_VERSION: str = __version__
 
-#: Project homepage / source repository (edit once you publish).
-PROJECT_URL: str = "https://github.com/your-org/wawekit"
+#: Organization website.
+ORG_URL: str = "https://thewaweai.com"
+
+#: Project homepage / source repository.
+PROJECT_URL: str = "https://github.com/SreeVasthav-Upputoori/WaweKit"
+
+#: Developer / author details.  Each entry is a dict with name, email(s).
+DEVELOPERS: list[dict[str, str | list[str]]] = [
+    {
+        "name": "Upputoori Sree Vasthav",
+        "emails": [
+            "sreevasthav.upputoori@gmail.com",
+            "sreevasthav-u@thewaweai.com",
+        ],
+    },
+    {
+        "name": "S Madhav Varma",
+        "emails": [
+            "srimadhavvarma@gmail.com",
+            "madhav-v@thewaweai.com",
+        ],
+    },
+]
 
 #: SPDX identifier of the project license.
 LICENSE: str = "MIT"

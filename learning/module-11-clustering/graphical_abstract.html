@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wawekit · Module 11 — Clustering (Graphical Abstract)</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #1a1d23; --panel2: #22262e; --line: #2f343d;
+    --text: #e7e9ee; --muted: #a3abb8; --accent: #4f8cc9;
+    --model: #6fbf73; --service: #e0a458; --gui: #4f8cc9;
+    --c0:#4f8cc9; --c1:#6fbf73; --c2:#e0a458; --c3:#d66a6a;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif; line-height: 1.5; padding: 32px; }
+  .sheet { max-width: 1000px; margin: 0 auto; }
+  header { border-bottom: 2px solid var(--line); padding-bottom: 16px; margin-bottom: 24px; }
+  .tag { color: var(--accent); font-weight: 700; letter-spacing: .08em; font-size: 13px; text-transform: uppercase; }
+  h1 { margin: 6px 0 4px; font-size: 27px; }
+  .sub { color: var(--muted); font-size: 15px; }
+  h2 { font-size: 16px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 28px 0 12px; }
+  .grid { display: grid; gap: 16px; }
+  .cols-2 { grid-template-columns: 1fr 1fr; }
+  @media (max-width: 720px) { .cols-2 { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  table.cmp { width:100%; border-collapse: collapse; font-size: 13px; }
+  table.cmp td, table.cmp th { border: 1px solid var(--line); padding: 6px 10px; text-align: left; }
+  table.cmp th { color: var(--muted); font-weight: 600; }
+  .dots span { display:inline-block; width:12px; height:12px; border-radius:50%; margin-right:3px; vertical-align:middle; }
+  .flow { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .node { border:1px solid var(--line); border-radius:8px; padding:8px 12px; font-size:13px; background:var(--panel2); }
+  .arrow { color: var(--muted); font-size:18px; }
+  ul.clean { margin: 0; padding-left: 18px; }
+  ul.clean li { margin: 4px 0; color: var(--muted); }
+  ul.clean li b { color: var(--text); }
+  .pill { display:inline-block; background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; font-size: 12px; color: var(--muted); margin: 2px 4px 2px 0; }
+  footer { margin-top: 28px; border-top: 1px solid var(--line); padding-top: 12px; color: var(--muted); font-size: 12px; display:flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+</style>
+</head>
+<body>
+<div class="sheet">
+  <header>
+    <div class="tag">Wawekit · Module 11</div>
+    <h1>Clustering — the Library's Natural Families</h1>
+    <div class="sub">Group by fingerprint similarity → a sortable Cluster column + a categorically-coloured chemical-space map.</div>
+  </header>
+
+  <h2>Flow (mostly composition of earlier parts)</h2>
+  <div class="card">
+    <div class="flow">
+      <div class="node">Ensure fingerprints<br><span style="color:var(--muted);font-size:12px;">reuse Module 6</span></div>
+      <span class="arrow">→</span>
+      <div class="node">Butina / K-Means<br><span style="color:var(--muted);font-size:12px;">RDKit ML.Cluster / sklearn</span></div>
+      <span class="arrow">→</span>
+      <div class="node">cache cluster id on record<br><span style="color:var(--muted);font-size:12px;">carries its ClusterRun</span></div>
+      <span class="arrow">→</span>
+      <div class="node">Cluster column<br>+ colour map by cluster</div>
+    </div>
+  </div>
+
+  <h2>Two algorithms</h2>
+  <div class="card">
+    <table class="cmp">
+      <tr><th>Method</th><th>Idea</th><th>Needs</th><th>Role</th></tr>
+      <tr><td><b>Butina</b></td><td>sphere exclusion on Tanimoto distance</td><td>a cutoff (not K)</td><td>the cheminformatics default</td></tr>
+      <tr><td><b>K-Means</b></td><td>centroid partitioning of the bit matrix</td><td>K up front</td><td>familiar fixed-K option</td></tr>
+    </table>
+    <p style="color:var(--muted); font-size:12.5px; margin:10px 0 0;">Both numbered <b>largest-first</b> (cluster 0 = biggest) — a stable convention the sort and the palette rely on. Demo: alkane family → cluster 0.</p>
+  </div>
+
+  <h2>Key Ideas</h2>
+  <div class="grid cols-2">
+    <div class="card">
+      <b>Design</b>
+      <ul class="clean">
+        <li><b>Cluster id is relational</b> → cached like similarity, carries its ClusterRun; stale ids actively cleared</li>
+        <li><b>Cached (not result-object)</b> because two surfaces read it: column + map</li>
+        <li><b>Lazy sklearn import</b>; Butina is pure RDKit</li>
+        <li><b>Reuse:</b> fingerprints, FingerprintOptionsWidget (4th consumer), FunctionWorker (8th job)</li>
+      </ul>
+    </div>
+    <div class="card">
+      <b>The Module 10 payoff — categorical colour</b>
+      <div class="dots" style="margin:6px 0;">
+        <span style="background:var(--c0)"></span><span style="background:var(--c1)"></span><span style="background:var(--c2)"></span><span style="background:var(--c3)"></span>
+        <span style="color:var(--muted);font-size:12px;">tab20 by cluster id, no colourbar</span>
+      </div>
+      <ul class="clean">
+        <li>Continuous colour-by was viridis + colourbar</li>
+        <li>A cluster is a <b>category</b>, not a scale → qualitative palette</li>
+        <li>Auto-selected after a run → families light up on the map</li>
+        <li>Missing = grey, as everywhere</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>Result</h2>
+  <div class="card">
+    <span class="pill">16 molecules · Butina · alkanes = cluster 0</span>
+    <span class="pill">sortable Cluster column + tooltip provenance</span>
+    <span class="pill">chemical-space map coloured by cluster</span>
+    <span class="pill">verified: 221 tests · ruff · black · -W error</span>
+  </div>
+
+  <footer>
+    <span>Wawekit v0.1.0 · Module 11 of 20 · Python 3.13 · RDKit · PySide6 · scikit-learn</span>
+    <span>MIT License · Graphical abstract</span>
+  </footer>
+</div>
+</body>
+</html>

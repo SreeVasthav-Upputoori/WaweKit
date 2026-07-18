@@ -1,0 +1,253 @@
+"""Divergence analysis: does standardization agree across protocols, and why not?
+
+Given a molecule and a set of protocols (R1), this module answers two questions:
+
+1. **Do they agree?** — on canonical-SMILES identity and on InChIKey identity
+   separately, since R1 showed the two can disagree (InChI absorbs tautomer
+   changes that SMILES reveals).
+2. **If not, why?** — via **ablation**: starting from the most thorough protocol
+   in the comparison, toggle each operation off one at a time and check whether
+   doing so changes the result to match another protocol's output. The first
+   operation whose removal resolves a disagreement is recorded as its likely
+   cause. This is what turns "these disagree" into "these disagree *because of
+   tautomer canonicalization*" — the taxonomy the paper is built on.
+
+Qt-free, so a divergence run scales to a benchmark harness (R5) unattended.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, field
+
+from rdkit import Chem
+
+from wawekit.services.reproducibility.protocol import (
+    OPERATION_ORDER,
+    StandardForm,
+    StandardizationProtocol,
+    StandardOp,
+    standardize,
+)
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class MoleculeDivergence:
+    """The divergence result for one molecule across a set of protocols.
+
+    Attributes
+    ----------
+    name:
+        Molecule identifier (for reporting).
+    forms:
+        One :class:`~wawekit.services.reproducibility.protocol.StandardForm` per
+        protocol, in the order the protocols were given.
+    smiles_agree:
+        Whether every protocol produced the same canonical SMILES.
+    inchikey_agree:
+        Whether every protocol produced the same InChIKey.
+    causes:
+        Operations implicated in the divergence, most-likely first (empty if
+        both identities agree, or if ablation could not isolate a cause).
+
+    """
+
+    name: str
+    forms: tuple[StandardForm, ...]
+    smiles_agree: bool
+    inchikey_agree: bool
+    causes: tuple[StandardOp, ...] = field(default_factory=tuple)
+
+    @property
+    def is_labile(self) -> bool:
+        """Whether *any* identity convention disagrees across protocols."""
+        return not (self.smiles_agree and self.inchikey_agree)
+
+    @property
+    def n_distinct_smiles(self) -> int:
+        """Number of distinct canonical-SMILES forms produced."""
+        return len({f.smiles for f in self.forms if f.ok or f.smiles})
+
+    @property
+    def n_distinct_inchikeys(self) -> int:
+        """Number of distinct InChIKey forms produced."""
+        return len({f.inchikey for f in self.forms if f.inchikey})
+
+
+def _attribute_cause(mol: Chem.Mol, protocol: StandardizationProtocol) -> list[StandardOp]:
+    """Find which operations, if removed from ``protocol``, change its result.
+
+    Ablation: for each enabled operation (checked in reverse application order,
+    since later operations are more likely to be the "last mover" on a
+    disagreement), standardize with that one operation switched off and compare
+    identities to the full protocol. An operation is implicated if removing it
+    changes *either* identity — the same operation can affect both, one, or
+    (rarely) neither if two operations jointly determine the outcome.
+
+    Returns operations most-to-least likely to be the cause: those that change
+    the InChIKey (the "deeper" identity) are ranked first.
+    """
+    full = standardize(mol, protocol)
+    if not full.ok:
+        return []  # can't attribute a cause when the full protocol itself failed
+
+    smiles_movers: list[StandardOp] = []
+    inchikey_movers: list[StandardOp] = []
+    for op in reversed(protocol.applied_ops()):
+        ablated = protocol.with_op(op, False)
+        result = standardize(mol, ablated)
+        if not result.ok:
+            continue
+        if result.inchikey != full.inchikey:
+            inchikey_movers.append(op)
+        elif result.smiles != full.smiles:
+            smiles_movers.append(op)
+
+    return inchikey_movers + smiles_movers
+
+
+def analyze_molecule(
+    mol: Chem.Mol,
+    protocols: tuple[StandardizationProtocol, ...],
+    name: str = "",
+    attribute_causes: bool = True,
+) -> MoleculeDivergence:
+    """Standardize ``mol`` with every protocol and analyze the divergence.
+
+    Parameters
+    ----------
+    mol:
+        The molecule to check.
+    protocols:
+        The protocols to compare (order defines the ``forms`` order).
+    name:
+        Display name for reporting.
+    attribute_causes:
+        If ``True`` and the molecule is labile, run ablation against the most
+        thorough (most-operations) protocol to attribute a cause. Ablation costs
+        one extra standardization per operation, so it can be disabled for a
+        fast first pass over a large dataset.
+
+    Returns
+    -------
+    MoleculeDivergence
+        The per-protocol forms and the agreement/cause analysis.
+
+    """
+    forms = tuple(standardize(mol, p) for p in protocols)
+    smiles_agree = len({f.smiles for f in forms}) <= 1
+    inchikey_agree = len({f.inchikey for f in forms}) <= 1
+
+    causes: tuple[StandardOp, ...] = ()
+    if attribute_causes and not (smiles_agree and inchikey_agree):
+        richest = max(protocols, key=lambda p: len(p.operations))
+        causes = tuple(_attribute_cause(mol, richest))
+
+    return MoleculeDivergence(
+        name=name,
+        forms=forms,
+        smiles_agree=smiles_agree,
+        inchikey_agree=inchikey_agree,
+        causes=causes,
+    )
+
+
+@dataclass(slots=True)
+class DivergenceRun:
+    """Outcome of a divergence analysis over a dataset.
+
+    Attributes
+    ----------
+    protocols:
+        The protocols compared.
+    results:
+        One :class:`MoleculeDivergence` per input molecule.
+
+    """
+
+    protocols: tuple[StandardizationProtocol, ...] = ()
+    results: list[MoleculeDivergence] = field(default_factory=list)
+
+    @property
+    def n_molecules(self) -> int:
+        """Total molecules analyzed."""
+        return len(self.results)
+
+    @property
+    def n_labile(self) -> int:
+        """Molecules where at least one identity convention disagrees."""
+        return sum(1 for r in self.results if r.is_labile)
+
+    @property
+    def n_smiles_labile(self) -> int:
+        """Molecules where canonical-SMILES identity disagrees across protocols."""
+        return sum(1 for r in self.results if not r.smiles_agree)
+
+    @property
+    def n_inchikey_labile(self) -> int:
+        """Molecules where InChIKey identity disagrees across protocols."""
+        return sum(1 for r in self.results if not r.inchikey_agree)
+
+    def cause_counts(self) -> dict[StandardOp, int]:
+        """Return how many labile molecules implicate each operation.
+
+        A molecule with multiple implicated operations counts once per
+        operation; :func:`analyze_molecule` ranks likely-cause operations first
+        within each result, but this tally is unordered across the dataset.
+        """
+        counts: dict[StandardOp, int] = dict.fromkeys(OPERATION_ORDER, 0)
+        for result in self.results:
+            for op in set(result.causes):
+                counts[op] += 1
+        return counts
+
+
+def analyze_divergence(
+    records: list[tuple[str, Chem.Mol]],
+    protocols: tuple[StandardizationProtocol, ...],
+    attribute_causes: bool = True,
+    progress: object = None,
+) -> DivergenceRun:
+    """Run divergence analysis over a dataset.
+
+    Parameters
+    ----------
+    records:
+        ``(name, mol)`` pairs to analyze. Kept decoupled from
+        :class:`~wawekit.models.molecule.MoleculeRecord` so this module has no
+        dependency on the GUI-facing model — a benchmark script can call it with
+        raw RDKit molecules.
+    protocols:
+        The protocols to compare.
+    attribute_causes:
+        Whether to run ablation-based cause attribution on labile molecules.
+    progress:
+        Optional ``(done, total)`` callback (kept untyped here to avoid a
+        dependency on the loader module's callback type; any ``Callable[[int,
+        int], None]`` works).
+
+    Returns
+    -------
+    DivergenceRun
+        Per-molecule results and dataset-level aggregates.
+
+    """
+    run = DivergenceRun(protocols=protocols)
+    total = len(records)
+    logger.info("Analyzing divergence for %d molecule(s) across %d protocol(s)", total, len(protocols))
+
+    for done, (name, mol) in enumerate(records, start=1):
+        run.results.append(analyze_molecule(mol, protocols, name=name, attribute_causes=attribute_causes))
+        if progress is not None:
+            progress(done, total)
+
+    logger.info(
+        "Divergence analysis complete: %d/%d labile (SMILES: %d, InChIKey: %d)",
+        run.n_labile,
+        total,
+        run.n_smiles_labile,
+        run.n_inchikey_labile,
+    )
+    return run

@@ -60,7 +60,9 @@ class StructureDelegate(QStyledItemDelegate):
     def __init__(self, parent: QWidget | None = None, dark: bool = True) -> None:
         super().__init__(parent)
         self._dark = dark
-        self._cache: dict[str, QPixmap] = {}
+        # Keyed by (canonical SMILES, highlighted-atoms tuple-or-None): the same
+        # molecule caches separately with and without a substructure highlight.
+        self._cache: dict[tuple[str, tuple[int, ...] | None], QPixmap] = {}
 
     def set_dark(self, dark: bool) -> None:
         """Switch palette and invalidate every cached thumbnail."""
@@ -99,13 +101,20 @@ class StructureDelegate(QStyledItemDelegate):
     # ---------------------------------------------------------------- helpers
     def _pixmap_for(self, record: MoleculeRecord) -> QPixmap | None:
         """Return the cached thumbnail for ``record``, rendering it on miss."""
-        key = record.smiles
+        # Fold the substructure highlight into the cache key: when a new search
+        # changes which atoms are lit, the key changes and the thumbnail
+        # re-renders; clear the query and it reverts to the plain cached image.
+        hit = record.substructure_match
+        highlight = tuple(sorted(hit.atoms)) if hit is not None and hit.is_match else None
+        key = (record.smiles, highlight)
         pixmap = self._cache.get(key)
         if pixmap is not None:
             return pixmap
 
         try:
-            svg = render_svg(record.mol, THUMB_WIDTH, THUMB_HEIGHT, dark=self._dark)
+            svg = render_svg(
+                record.mol, THUMB_WIDTH, THUMB_HEIGHT, dark=self._dark, highlight_atoms=highlight
+            )
         except Exception:  # noqa: BLE001 — a bad depiction must never crash painting
             logger.exception("Failed to render thumbnail for %s", record.name)
             return None

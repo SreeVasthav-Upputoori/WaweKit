@@ -29,7 +29,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from rdkit import Chem
+from rdkit import Chem, rdBase
 
 from wawekit.models.molecule import MoleculeRecord
 
@@ -109,6 +109,49 @@ def file_dialog_filter() -> str:
     """Build the Qt file-dialog name filter string from the supported extensions."""
     patterns = " ".join(f"*{ext}" for ext in sorted(SUPPORTED_EXTENSIONS))
     return f"Molecule files ({patterns});;All files (*)"
+
+
+def parse_smiles(text: str, name: str = "query") -> MoleculeRecord | None:
+    """Parse a single SMILES string into a record, or ``None`` if it is invalid.
+
+    The file loaders above turn *files* into records; this turns one *typed
+    string* into one. Module 7 needs it so a user can paste a structure to
+    search for without first saving it to disk — and so the dialog that accepts
+    that paste never has to import RDKit itself, which the layering rule
+    (``gui -> services -> models -> core``) forbids.
+
+    Returns ``None`` rather than raising: invalid SMILES is the *normal* state
+    of a text box someone is halfway through typing, not an exceptional event.
+    Callers use it to drive live validation.
+
+    Parameters
+    ----------
+    text:
+        The SMILES string. Surrounding whitespace is ignored.
+    name:
+        Display name for the resulting record.
+
+    Returns
+    -------
+    MoleculeRecord | None
+        A record with no source file (``source`` is ``None``), or ``None`` if
+        RDKit could not parse and sanitize the string.
+
+    """
+    smiles = text.strip()
+    if not smiles:
+        return None
+    # RDKit reports parse failures by returning None *and* writing to stderr; it
+    # does not raise. The stderr half is unwanted here: live validation parses on
+    # every keystroke, so "C1CC" mid-typing would spew a Parse Error line per
+    # character. BlockLogs mutes RDKit for this call only — we already surface
+    # the failure through the return value.
+    with rdBase.BlockLogs():
+        mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        logger.debug("Rejected SMILES %r", smiles)
+        return None
+    return MoleculeRecord(mol=mol, name=name)
 
 
 def load_file(path: Path, progress: ProgressCallback | None = None) -> LoadReport:

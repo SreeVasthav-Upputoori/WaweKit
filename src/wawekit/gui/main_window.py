@@ -19,10 +19,18 @@ Design notes
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThreadPool
-from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent, QKeySequence
+from PySide6.QtCore import QSettings, Qt, QThreadPool, QUrl
+from PySide6.QtGui import (
+    QAction,
+    QCloseEvent,
+    QDesktopServices,
+    QDragEnterEvent,
+    QDropEvent,
+    QKeySequence,
+)
 from PySide6.QtWidgets import (
     QDockWidget,
     QFileDialog,
@@ -31,19 +39,72 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QProgressBar,
+    QPushButton,
     QStackedWidget,
 )
 
 from wawekit.core import constants
-from wawekit.core.config import AppConfig
+from wawekit.core.config import AppConfig, save_config
+from wawekit.core.logging_config import setup_logging
+from wawekit.gui.dialogs.batch_dialog import BatchDialog
+from wawekit.gui.dialogs.chemical_space_dialog import ChemicalSpaceDialog
+from wawekit.gui.dialogs.clustering_dialog import ClusteringDialog
+from wawekit.gui.dialogs.conformer_dialog import ConformerDialog
+from wawekit.gui.dialogs.fingerprint_dialog import FingerprintDialog
+from wawekit.gui.dialogs.report_dialog import ReportDialog
+from wawekit.gui.dialogs.settings_dialog import SettingsDialog
+from wawekit.gui.dialogs.similarity_dialog import SimilarityDialog
 from wawekit.gui.dialogs.standardize_dialog import StandardizeDialog
+from wawekit.gui.dialogs.substructure_dialog import SubstructureDialog
 from wawekit.gui.icons import get_icon
 from wawekit.gui.themes.theme_manager import ThemeManager
+from wawekit.gui.widgets.chemical_space_panel import ChemicalSpacePanel
+from wawekit.gui.widgets.conformer_panel import ConformerPanel
+from wawekit.gui.widgets.molecule_filter import ScaffoldFilter
 from wawekit.gui.widgets.molecule_table import MoleculeTablePanel
+from wawekit.gui.widgets.scaffold_panel import ScaffoldPanel
 from wawekit.gui.widgets.structure_viewer import StructureViewerPanel
+from wawekit.models.fingerprints import FingerprintOptions
+from wawekit.models.molecule import MoleculeRecord
+from wawekit.models.scaffold import ScaffoldRepresentation
+from wawekit.services.batch import BatchResult, run_batch
+from wawekit.services.chemistry.chemical_space import (
+    ProjectionResult,
+    project,
+)
+from wawekit.services.chemistry.clustering import (
+    ClusterReport,
+    cluster_molecules,
+)
+from wawekit.services.chemistry.conformers import (
+    ConformerReport,
+    generate_conformers,
+)
+from wawekit.services.chemistry.descriptors import (
+    DescriptorReport,
+    compute_descriptors,
+)
+from wawekit.services.chemistry.fingerprints import (
+    FingerprintReport,
+    compute_fingerprints,
+)
+from wawekit.services.chemistry.scaffolds import (
+    ScaffoldGroup,
+    ScaffoldReport,
+    compute_scaffolds,
+    group_scaffolds,
+)
+from wawekit.services.chemistry.similarity import (
+    SimilarityReport,
+    search_similar,
+)
 from wawekit.services.chemistry.standardizer import (
     StandardizationReport,
     standardize_records,
+)
+from wawekit.services.chemistry.substructure import (
+    SubstructureReport,
+    search_substructure,
 )
 from wawekit.services.io.molecule_loader import (
     SUPPORTED_EXTENSIONS,
@@ -51,6 +112,7 @@ from wawekit.services.io.molecule_loader import (
     file_dialog_filter,
 )
 from wawekit.services.io.molecule_loader import load_file as load_molecule_file
+from wawekit.services.reporting import ReportResult, generate_report
 from wawekit.services.workers import FunctionWorker
 
 logger = logging.getLogger(__name__)
@@ -83,6 +145,33 @@ class MainWindow(QMainWindow):
         # Standardization worker (kept alive for the same GC reason). Loads are
         # paused while it runs so the dataset cannot change mid-pipeline.
         self._std_worker: FunctionWorker | None = None
+        # Descriptor worker (same lifetime discipline; loads pause while it runs).
+        self._desc_worker: FunctionWorker | None = None
+        # Fingerprint worker (ditto).
+        self._fp_worker: FunctionWorker | None = None
+        # Similarity-search worker (ditto).
+        self._sim_worker: FunctionWorker | None = None
+        # Scaffold-analysis worker (ditto).
+        self._scaffold_worker: FunctionWorker | None = None
+        # Conformer-generation worker (ditto).
+        self._conf_worker: FunctionWorker | None = None
+        # Chemical-space projection worker (ditto).
+        self._space_worker: FunctionWorker | None = None
+        # Clustering worker (ditto).
+        self._cluster_worker: FunctionWorker | None = None
+        # Substructure-search worker (ditto), and whether that run filters.
+        self._substruct_worker: FunctionWorker | None = None
+        self._substruct_only_matches = True
+        # Batch pipeline worker and its cancellation event (the first cancellable
+        # operation — a batch can run long enough to want stopping).
+        self._batch_worker: FunctionWorker | None = None
+        self._batch_cancel: threading.Event | None = None
+        # Report-generation worker (ditto).
+        self._report_worker: FunctionWorker | None = None
+        # Encoding used by the last search, so the dialog reopens on it rather
+        # than on the defaults — re-encoding a dataset behind the user's back is
+        # exactly the silent mixing Module 6 was about.
+        self._last_fingerprint: FingerprintOptions | None = None
 
         self.setWindowTitle(f"{constants.APP_NAME} {constants.APP_VERSION}")
         self.resize(config.window_width, config.window_height)
@@ -94,6 +183,7 @@ class MainWindow(QMainWindow):
         self._build_menus()
         self._build_toolbar()
         self._build_statusbar()
+        self._restore_window_state()
 
         logger.info("Main window constructed")
 
@@ -139,9 +229,58 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, structure_dock)
         self._structure_dock = structure_dock
 
-        # Cross-panel wiring: table selection drives the structure viewer, and
-        # theme changes re-render every depiction with the matching palette.
+        # Scaffolds dock: the grouping view. Tabbed with Workspace on the left so
+        # the two navigation panels share space and the table keeps the centre.
+        scaffold_dock = QDockWidget("Scaffolds", self)
+        scaffold_dock.setObjectName("scaffoldDock")
+        scaffold_dock.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
+        )
+        self._scaffold_panel = ScaffoldPanel(dark=self._theme_manager.is_dark, parent=scaffold_dock)
+        scaffold_dock.setWidget(self._scaffold_panel)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, scaffold_dock)
+        self.tabifyDockWidget(self._workspace_dock, scaffold_dock)
+        self._workspace_dock.raise_()  # Workspace is the default-visible tab
+        self._scaffold_dock = scaffold_dock
+
+        # Conformers dock: the 3D viewer + energy table. Tabbed with Structure on
+        # the right, since both follow the current molecule selection.
+        conformer_dock = QDockWidget("Conformers", self)
+        conformer_dock.setObjectName("conformerDock")
+        conformer_dock.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
+        )
+        self._conformer_panel = ConformerPanel(
+            dark=self._theme_manager.is_dark, parent=conformer_dock
+        )
+        conformer_dock.setWidget(self._conformer_panel)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, conformer_dock)
+        self.tabifyDockWidget(self._structure_dock, conformer_dock)
+        self._structure_dock.raise_()  # Structure is the default-visible right tab
+        self._conformer_dock = conformer_dock
+
+        # Chemical Space dock: a wide 2D scatter, so it lives along the bottom
+        # spanning the window rather than in a narrow side column.
+        space_dock = QDockWidget("Chemical Space", self)
+        space_dock.setObjectName("chemicalSpaceDock")
+        self._space_panel = ChemicalSpacePanel(dark=self._theme_manager.is_dark, parent=space_dock)
+        space_dock.setWidget(self._space_panel)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, space_dock)
+        space_dock.hide()  # revealed when a projection is first run
+        self._space_dock = space_dock
+
+        # Cross-panel wiring: table selection drives the structure viewer and the
+        # conformer panel; theme changes re-render every depiction/viewer.
         self._table_panel.selection_changed.connect(self._structure_panel.set_record)
+        self._table_panel.selection_changed.connect(self._conformer_panel.set_record)
+        self._table_panel.selection_changed.connect(self._on_selection_for_space)
+        self._table_panel.similarity_requested.connect(self._on_similarity_requested)
+        self._scaffold_panel.scaffold_selected.connect(self._on_scaffold_selected)
+        self._scaffold_panel.representation_changed.connect(
+            self._on_scaffold_representation_changed
+        )
+        # Plot → table: a click or lasso in the space selects those molecules.
+        self._space_panel.points_selected.connect(self._table_panel.select_records)
         self._theme_manager.theme_changed.connect(self._on_theme_changed)
 
     def _build_actions(self) -> None:
@@ -151,12 +290,85 @@ class MainWindow(QMainWindow):
         self.action_open.setStatusTip("Open molecule files (SDF, MOL, SMILES)")
         self.action_open.triggered.connect(self._on_open_files)
 
+        self.action_report = QAction(get_icon("report"), "Generate &Report…", self)
+        self.action_report.setShortcut("Ctrl+R")
+        self.action_report.setStatusTip("Generate a shareable HTML/PDF report of the dataset")
+        self.action_report.triggered.connect(self._on_report)
+
+        self.action_settings = QAction(get_icon("settings"), "&Settings…", self)
+        self.action_settings.setShortcut(QKeySequence.StandardKey.Preferences)
+        self.action_settings.setStatusTip("Edit application settings (theme, logging, layout)")
+        self.action_settings.triggered.connect(self._on_settings)
+
         self.action_standardize = QAction(get_icon("standardize"), "&Standardize…", self)
         self.action_standardize.setShortcut("Ctrl+Shift+S")
         self.action_standardize.setStatusTip(
             "Clean structures: strip salts, neutralize, canonicalize, deduplicate"
         )
         self.action_standardize.triggered.connect(self._on_standardize)
+
+        self.action_descriptors = QAction(get_icon("descriptors"), "Compute &Descriptors", self)
+        self.action_descriptors.setShortcut("Ctrl+D")
+        self.action_descriptors.setStatusTip(
+            "Compute MW, LogP, TPSA, HBD/HBA, rotatable bonds, rings and Lipinski violations"
+        )
+        self.action_descriptors.triggered.connect(self._on_compute_descriptors)
+
+        self.action_fingerprints = QAction(get_icon("fingerprint"), "Compute &Fingerprints…", self)
+        self.action_fingerprints.setShortcut("Ctrl+Shift+F")
+        self.action_fingerprints.setStatusTip(
+            "Encode structures as bit vectors (Morgan/ECFP, MACCS, RDKit) for similarity search"
+        )
+        self.action_fingerprints.triggered.connect(self._on_compute_fingerprints)
+
+        self.action_similarity = QAction(get_icon("similarity"), "Si&milarity Search…", self)
+        self.action_similarity.setShortcut("Ctrl+Shift+M")
+        self.action_similarity.setStatusTip(
+            "Rank the dataset by similarity to one query molecule (Tanimoto, Dice or Cosine)"
+        )
+        self.action_similarity.triggered.connect(self._on_similarity_search)
+
+        self.action_scaffolds = QAction(get_icon("scaffold"), "&Analyze Scaffolds", self)
+        self.action_scaffolds.setShortcut("Ctrl+Shift+A")
+        self.action_scaffolds.setStatusTip(
+            "Group the dataset by Bemis–Murcko scaffold and show scaffold diversity"
+        )
+        self.action_scaffolds.triggered.connect(self._on_analyze_scaffolds)
+
+        self.action_conformers = QAction(get_icon("conformer"), "Generate &Conformers…", self)
+        self.action_conformers.setShortcut("Ctrl+Shift+C")
+        self.action_conformers.setStatusTip(
+            "Generate and rank 3D conformers (ETKDG + MMFF/UFF) for the selection or dataset"
+        )
+        self.action_conformers.triggered.connect(self._on_generate_conformers)
+
+        self.action_chemical_space = QAction(get_icon("chemspace"), "Chemical &Space…", self)
+        self.action_chemical_space.setShortcut("Ctrl+Shift+P")
+        self.action_chemical_space.setStatusTip(
+            "Project the dataset into an interactive 2D map (PCA or t-SNE on fingerprints)"
+        )
+        self.action_chemical_space.triggered.connect(self._on_chemical_space)
+
+        self.action_cluster = QAction(get_icon("cluster"), "&Cluster Molecules…", self)
+        self.action_cluster.setShortcut("Ctrl+Shift+K")
+        self.action_cluster.setStatusTip(
+            "Group similar molecules (Butina or K-Means) into a sortable, colourable cluster id"
+        )
+        self.action_cluster.triggered.connect(self._on_cluster)
+
+        self.action_substructure = QAction(get_icon("substructure"), "S&ubstructure Search…", self)
+        self.action_substructure.setShortcut("Ctrl+Shift+U")
+        self.action_substructure.setStatusTip(
+            "Find molecules containing a SMARTS/SMILES fragment; highlight the matched atoms"
+        )
+        self.action_substructure.triggered.connect(self._on_substructure)
+
+        self.action_batch = QAction(get_icon("batch"), "&Batch Processing…", self)
+        self.action_batch.setShortcut("Ctrl+B")
+        self.action_batch.setStatusTip(
+            "Run a pipeline (standardize → descriptors → … → export) over the whole dataset"
+        )
+        self.action_batch.triggered.connect(self._on_batch)
 
         self.action_quit = QAction("E&xit", self)
         self.action_quit.setShortcut(QKeySequence.StandardKey.Quit)
@@ -174,6 +386,12 @@ class MainWindow(QMainWindow):
         self.action_toggle_workspace.setText("&Workspace Panel")
         self.action_toggle_structure = self._structure_dock.toggleViewAction()
         self.action_toggle_structure.setText("&Structure Panel")
+        self.action_toggle_scaffolds = self._scaffold_dock.toggleViewAction()
+        self.action_toggle_scaffolds.setText("Scaffolds &Panel")
+        self.action_toggle_conformers = self._conformer_dock.toggleViewAction()
+        self.action_toggle_conformers.setText("&Conformers Panel")
+        self.action_toggle_space = self._space_dock.toggleViewAction()
+        self.action_toggle_space.setText("Chemical S&pace Panel")
 
         self.action_about = QAction("&About", self)
         self.action_about.setStatusTip("About this application")
@@ -185,17 +403,33 @@ class MainWindow(QMainWindow):
 
         file_menu = menubar.addMenu("&File")
         file_menu.addAction(self.action_open)
+        file_menu.addAction(self.action_report)
+        file_menu.addSeparator()
+        file_menu.addAction(self.action_settings)
         file_menu.addSeparator()
         file_menu.addAction(self.action_quit)
 
         chemistry_menu = menubar.addMenu("&Chemistry")
         chemistry_menu.addAction(self.action_standardize)
+        chemistry_menu.addAction(self.action_descriptors)
+        chemistry_menu.addAction(self.action_fingerprints)
+        chemistry_menu.addAction(self.action_similarity)
+        chemistry_menu.addAction(self.action_scaffolds)
+        chemistry_menu.addAction(self.action_conformers)
+        chemistry_menu.addAction(self.action_chemical_space)
+        chemistry_menu.addAction(self.action_cluster)
+        chemistry_menu.addAction(self.action_substructure)
+        chemistry_menu.addSeparator()
+        chemistry_menu.addAction(self.action_batch)
 
         view_menu = menubar.addMenu("&View")
         view_menu.addAction(self.action_toggle_theme)
         view_menu.addSeparator()
         view_menu.addAction(self.action_toggle_workspace)
         view_menu.addAction(self.action_toggle_structure)
+        view_menu.addAction(self.action_toggle_scaffolds)
+        view_menu.addAction(self.action_toggle_conformers)
+        view_menu.addAction(self.action_toggle_space)
 
         help_menu = menubar.addMenu("&Help")
         help_menu.addAction(self.action_about)
@@ -208,15 +442,32 @@ class MainWindow(QMainWindow):
         toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         toolbar.addAction(self.action_open)
         toolbar.addAction(self.action_standardize)
+        toolbar.addAction(self.action_descriptors)
+        toolbar.addAction(self.action_fingerprints)
+        toolbar.addAction(self.action_similarity)
+        toolbar.addAction(self.action_scaffolds)
+        toolbar.addAction(self.action_conformers)
+        toolbar.addAction(self.action_chemical_space)
+        toolbar.addAction(self.action_cluster)
+        toolbar.addAction(self.action_substructure)
+        toolbar.addSeparator()
+        toolbar.addAction(self.action_batch)
+        toolbar.addAction(self.action_report)
         toolbar.addSeparator()
         toolbar.addAction(self.action_toggle_theme)
 
     def _build_statusbar(self) -> None:
-        """Create the status bar with a (hidden) progress bar for background loads."""
+        """Create the status bar with a (hidden) progress bar and cancel button."""
         self._progress = QProgressBar(self)
         self._progress.setMaximumWidth(220)
         self._progress.setVisible(False)
+        # Only the batch pipeline is cancellable, so the button lives here and is
+        # revealed only while a batch runs.
+        self._cancel_button = QPushButton("Cancel", self)
+        self._cancel_button.setVisible(False)
+        self._cancel_button.clicked.connect(self._on_cancel_batch)
         self.statusBar().addPermanentWidget(self._progress)
+        self.statusBar().addPermanentWidget(self._cancel_button)
         self.statusBar().showMessage("Ready")
 
     # ------------------------------------------------------------ drag & drop
@@ -252,10 +503,24 @@ class MainWindow(QMainWindow):
     def _start_next_load(self) -> None:
         """Start loading the next queued file, if idle and any remain.
 
-        Loads also wait while standardization runs — the pipeline works on a
-        snapshot of the dataset, and appending mid-run would lose records.
+        Loads also wait while standardization or descriptor computation runs —
+        those work on a snapshot of the dataset, and appending mid-run would
+        leave the new records out of the result.
         """
-        if self._active_worker is not None or self._std_worker is not None:
+        if (
+            self._active_worker is not None
+            or self._std_worker is not None
+            or self._desc_worker is not None
+            or self._fp_worker is not None
+            or self._sim_worker is not None
+            or self._scaffold_worker is not None
+            or self._conf_worker is not None
+            or self._space_worker is not None
+            or self._cluster_worker is not None
+            or self._substruct_worker is not None
+            or self._batch_worker is not None
+            or self._report_worker is not None
+        ):
             return
         if not self._pending_paths:
             return
@@ -281,6 +546,38 @@ class MainWindow(QMainWindow):
             self._progress.setVisible(False)
             self.action_open.setEnabled(True)
         self._start_next_load()
+
+    # ------------------------------------------------------------ run helpers
+    def _set_actions_busy(self, busy: bool) -> None:
+        """Enable or disable every action that must not run concurrently.
+
+        Each dataset-wide operation works on a snapshot, so allowing a second
+        one to start mid-run would let the two disagree about what the dataset
+        is. One helper keeps the set consistent as more operations arrive.
+        """
+        for action in (
+            self.action_open,
+            self.action_standardize,
+            self.action_descriptors,
+            self.action_fingerprints,
+            self.action_similarity,
+            self.action_scaffolds,
+            self.action_conformers,
+            self.action_chemical_space,
+            self.action_cluster,
+            self.action_substructure,
+            self.action_batch,
+            self.action_report,
+        ):
+            action.setEnabled(not busy)
+
+    def _begin_run(self, total: int, message: str) -> None:
+        """Put the UI into 'long operation running' state."""
+        self._set_actions_busy(True)
+        self._progress.setRange(0, total)
+        self._progress.setValue(0)
+        self._progress.setVisible(True)
+        self.statusBar().showMessage(message)
 
     # --------------------------------------------------------------- handlers
     def _on_open_files(self) -> None:
@@ -348,12 +645,7 @@ class MainWindow(QMainWindow):
             return  # cancelled
 
         records = list(self._table_panel.model.records)  # snapshot for the worker
-        self.action_open.setEnabled(False)
-        self.action_standardize.setEnabled(False)
-        self._progress.setRange(0, len(records))
-        self._progress.setValue(0)
-        self._progress.setVisible(True)
-        self.statusBar().showMessage(f"Standardizing {len(records)} molecule(s)…")
+        self._begin_run(len(records), f"Standardizing {len(records)} molecule(s)…")
 
         worker = FunctionWorker(standardize_records, records, options, inject_progress=True)
         worker.signals.progress.connect(self._on_load_progress)
@@ -363,10 +655,23 @@ class MainWindow(QMainWindow):
         QThreadPool.globalInstance().start(worker)
         logger.info("Started standardization of %d record(s)", len(records))
 
+    def _reset_derived_views(self) -> None:
+        """Clear every panel/filter that pointed at the previous dataset.
+
+        Used whenever the record objects are *replaced* (standardization, a batch
+        run): the old projection, conformers, scaffold grouping and substructure
+        filter all reference records that no longer exist.
+        """
+        self._structure_panel.set_record(None)
+        self._conformer_panel.set_record(None)
+        self._space_panel.clear()
+        self._table_panel.apply_substructure_filter(False)
+        self._reset_scaffold_view()
+
     def _on_standardize_finished(self, report: StandardizationReport) -> None:
         """Adopt the standardized dataset and present the change report."""
         self._table_panel.set_records(report.records)
-        self._structure_panel.set_record(None)
+        self._reset_derived_views()
         self._sources_list.addItem(
             f"Standardized  —  {report.n_changed} changed, "
             f"{report.duplicates_removed} duplicate(s) removed"
@@ -389,8 +694,7 @@ class MainWindow(QMainWindow):
         """Reset UI state after standardization and resume any queued loads."""
         self._std_worker = None
         self._progress.setVisible(False)
-        self.action_open.setEnabled(True)
-        self.action_standardize.setEnabled(True)
+        self._set_actions_busy(False)
         self._start_next_load()
 
     def _show_standardize_summary(self, report: StandardizationReport) -> None:
@@ -412,6 +716,783 @@ class MainWindow(QMainWindow):
             box.setDetailedText("\n".join(details))
         box.exec()
 
+    # ------------------------------------------------------------ descriptors
+    def _on_compute_descriptors(self) -> None:
+        """Launch descriptor computation over the loaded dataset."""
+        if self._table_panel.row_count == 0:
+            self.statusBar().showMessage("Load molecules before computing descriptors", 4000)
+            return
+
+        records = list(self._table_panel.model.records)  # snapshot for the worker
+        self._begin_run(len(records), f"Computing descriptors for {len(records)} molecule(s)…")
+
+        worker = FunctionWorker(compute_descriptors, records, inject_progress=True)
+        worker.signals.progress.connect(self._on_load_progress)
+        worker.signals.finished.connect(self._on_descriptors_finished)
+        worker.signals.error.connect(self._on_descriptors_error)
+        self._desc_worker = worker
+        QThreadPool.globalInstance().start(worker)
+        logger.info("Started descriptor computation for %d record(s)", len(records))
+
+    def _on_descriptors_finished(self, report: DescriptorReport) -> None:
+        """Repaint the descriptor columns and report the run."""
+        # Values were cached on the same record objects the table already holds,
+        # so we refresh the affected columns rather than swapping the dataset.
+        self._table_panel.refresh_descriptors()
+        self.statusBar().showMessage(
+            f"Descriptors: {report.computed} computed, {report.reused} reused, "
+            f"{report.n_failed} failure(s)",
+            8000,
+        )
+        if report.failures:
+            self._show_descriptor_failures(report)
+        self._finish_descriptors()
+
+    def _on_descriptors_error(self, message: str) -> None:
+        """Report a whole-run failure (per-molecule failures are handled inline)."""
+        QMessageBox.warning(self, "Descriptor computation failed", message)
+        self._finish_descriptors()
+
+    def _finish_descriptors(self) -> None:
+        """Reset UI state after descriptors and resume any queued loads."""
+        self._desc_worker = None
+        self._progress.setVisible(False)
+        self._set_actions_busy(False)
+        self._start_next_load()
+
+    def _show_descriptor_failures(self, report: DescriptorReport) -> None:
+        """List molecules whose descriptors could not be computed."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Descriptors computed with errors")
+        box.setText(
+            f"{report.n_failed} molecule(s) could not be processed.\n"
+            f"{report.computed} computed successfully."
+        )
+        shown = report.failures[:_MAX_ERRORS_SHOWN]
+        details = "\n".join(shown)
+        if report.n_failed > _MAX_ERRORS_SHOWN:
+            details += f"\n… and {report.n_failed - _MAX_ERRORS_SHOWN} more (see log file)"
+        box.setDetailedText(details)
+        box.exec()
+
+    # ----------------------------------------------------------- fingerprints
+    def _on_compute_fingerprints(self) -> None:
+        """Configure and launch fingerprint computation over the dataset."""
+        if self._table_panel.row_count == 0:
+            self.statusBar().showMessage("Load molecules before computing fingerprints", 4000)
+            return
+        options = FingerprintDialog.get_options(self)
+        if options is None:
+            return  # cancelled
+
+        records = list(self._table_panel.model.records)  # snapshot for the worker
+        self._begin_run(
+            len(records),
+            f"Computing {options.label} fingerprints for {len(records)} molecule(s)…",
+        )
+
+        worker = FunctionWorker(compute_fingerprints, records, options, inject_progress=True)
+        worker.signals.progress.connect(self._on_load_progress)
+        worker.signals.finished.connect(self._on_fingerprints_finished)
+        worker.signals.error.connect(self._on_fingerprints_error)
+        self._fp_worker = worker
+        QThreadPool.globalInstance().start(worker)
+        logger.info("Started %s fingerprints for %d record(s)", options.label, len(records))
+
+    def _on_fingerprints_finished(self, report: FingerprintReport) -> None:
+        """Repaint the fingerprint column and report the run."""
+        # Cached on the same record objects the table holds → repaint, no swap.
+        self._table_panel.refresh_fingerprints()
+        self.statusBar().showMessage(
+            f"Fingerprints ({report.options.label}): {report.computed} computed, "
+            f"{report.reused} reused, {report.n_failed} failure(s)",
+            8000,
+        )
+        if report.failures:
+            self._show_fingerprint_failures(report)
+        self._finish_fingerprints()
+
+    def _on_fingerprints_error(self, message: str) -> None:
+        """Report a whole-run failure (per-molecule failures are handled inline)."""
+        QMessageBox.warning(self, "Fingerprint computation failed", message)
+        self._finish_fingerprints()
+
+    def _finish_fingerprints(self) -> None:
+        """Reset UI state after fingerprints and resume any queued loads."""
+        self._fp_worker = None
+        self._progress.setVisible(False)
+        self._set_actions_busy(False)
+        self._start_next_load()
+
+    def _show_fingerprint_failures(self, report: FingerprintReport) -> None:
+        """List molecules whose fingerprint could not be computed."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Fingerprints computed with errors")
+        box.setText(
+            f"{report.n_failed} molecule(s) could not be processed.\n"
+            f"{report.computed} computed successfully."
+        )
+        details = "\n".join(report.failures[:_MAX_ERRORS_SHOWN])
+        if report.n_failed > _MAX_ERRORS_SHOWN:
+            details += f"\n… and {report.n_failed - _MAX_ERRORS_SHOWN} more (see log file)"
+        box.setDetailedText(details)
+        box.exec()
+
+    # ------------------------------------------------------------- similarity
+    def _on_similarity_requested(self, record: MoleculeRecord) -> None:
+        """Run a search from the table's right-click menu, pre-filled with ``record``."""
+        self._start_similarity_search(query=record)
+
+    def _on_similarity_search(self) -> None:
+        """Run a search from the menu/toolbar, pre-filled with the selection if any."""
+        selected = self._table_panel.selected_records()
+        self._start_similarity_search(query=selected[0] if len(selected) == 1 else None)
+
+    def _start_similarity_search(self, query: MoleculeRecord | None) -> None:
+        """Configure and launch a similarity search over the dataset.
+
+        Both entry points land here: the only difference between them is which
+        molecule the dialog opens on, and the dialog handles ``None`` by asking
+        the user to paste one.
+        """
+        if self._table_panel.row_count == 0:
+            self.statusBar().showMessage("Load molecules before searching", 4000)
+            return
+        request = SimilarityDialog.get_request(query, self._last_fingerprint, self)
+        if request is None:
+            return  # cancelled, or no usable query
+
+        records = list(self._table_panel.model.records)  # snapshot for the worker
+        self._last_fingerprint = request.fingerprint
+        self._begin_run(
+            len(records),
+            f"Searching {len(records)} molecule(s) for similarity to {request.query_name}…",
+        )
+
+        worker = FunctionWorker(search_similar, records, request, inject_progress=True)
+        worker.signals.progress.connect(self._on_load_progress)
+        worker.signals.finished.connect(self._on_similarity_finished)
+        worker.signals.error.connect(self._on_similarity_error)
+        self._sim_worker = worker
+        QThreadPool.globalInstance().start(worker)
+        logger.info("Started similarity search: %s", request.query_name)
+
+    def _on_similarity_finished(self, report: SimilarityReport) -> None:
+        """Rank the table by the new scores and report the run."""
+        # Scores were cached on the same record objects the table holds, so this
+        # repaints and re-sorts rather than swapping the dataset.
+        self._table_panel.refresh_similarity()
+        self._sources_list.addItem(
+            f"Similarity  —  {report.query.metric} vs {report.query.name}, "
+            f"{report.n_scored} scored"
+        )
+        best = report.ranked[0] if report.ranked else None
+        self.statusBar().showMessage(
+            f"{report.query.label}: {report.n_scored} scored"
+            + (f", best {best.name} at {best.similarity.display}" if best else "")
+            + (f", {report.n_skipped} skipped" if report.n_skipped else "")
+            + " — sorted by score; filter with e.g. 'Sim >= 0.7'",
+            12000,
+        )
+        if report.skipped:
+            self._show_similarity_skipped(report)
+        self._finish_similarity()
+
+    def _on_similarity_error(self, message: str) -> None:
+        """Report a whole-run failure (per-molecule problems are handled inline)."""
+        QMessageBox.warning(self, "Similarity search failed", message)
+        self._finish_similarity()
+
+    def _finish_similarity(self) -> None:
+        """Reset UI state after a search and resume any queued loads."""
+        self._sim_worker = None
+        self._progress.setVisible(False)
+        self._set_actions_busy(False)
+        self._start_next_load()
+
+    def _show_similarity_skipped(self, report: SimilarityReport) -> None:
+        """List molecules that could not be scored, and why."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Search completed with skipped molecules")
+        box.setText(
+            f"{report.n_skipped} molecule(s) could not be scored and are blank in the "
+            f"Similarity column.\n{report.n_scored} scored successfully."
+        )
+        details = "\n".join(report.skipped[:_MAX_ERRORS_SHOWN])
+        if report.n_skipped > _MAX_ERRORS_SHOWN:
+            details += f"\n… and {report.n_skipped - _MAX_ERRORS_SHOWN} more (see log file)"
+        box.setDetailedText(details)
+        box.exec()
+
+    # -------------------------------------------------------------- scaffolds
+    def _on_analyze_scaffolds(self) -> None:
+        """Launch Bemis–Murcko scaffold analysis over the loaded dataset."""
+        if self._table_panel.row_count == 0:
+            self.statusBar().showMessage("Load molecules before analyzing scaffolds", 4000)
+            return
+
+        records = list(self._table_panel.model.records)  # snapshot for the worker
+        self._begin_run(len(records), f"Analyzing scaffolds for {len(records)} molecule(s)…")
+
+        worker = FunctionWorker(compute_scaffolds, records, inject_progress=True)
+        worker.signals.progress.connect(self._on_load_progress)
+        worker.signals.finished.connect(self._on_scaffolds_finished)
+        worker.signals.error.connect(self._on_scaffolds_error)
+        self._scaffold_worker = worker
+        QThreadPool.globalInstance().start(worker)
+        logger.info("Started scaffold analysis for %d record(s)", len(records))
+
+    def _on_scaffolds_finished(self, report: ScaffoldReport) -> None:
+        """Repaint the scaffold column, group the dataset, and reveal the panel."""
+        # Scaffolds were cached on the same record objects the table holds, so
+        # this repaints the column rather than swapping the dataset.
+        self._table_panel.refresh_scaffolds()
+        self._regroup_scaffolds()
+        self._scaffold_dock.raise_()  # bring the Scaffolds tab to the front
+        self.statusBar().showMessage(
+            f"Scaffolds: {report.computed} computed, {report.reused} reused, "
+            f"{report.n_failed} failure(s) — see the Scaffolds panel",
+            9000,
+        )
+        if report.failures:
+            self._show_scaffold_failures(report)
+        self._finish_scaffolds()
+
+    def _on_scaffolds_error(self, message: str) -> None:
+        """Report a whole-run failure (per-molecule problems are handled inline)."""
+        QMessageBox.warning(self, "Scaffold analysis failed", message)
+        self._finish_scaffolds()
+
+    def _finish_scaffolds(self) -> None:
+        """Reset UI state after scaffold analysis and resume any queued loads."""
+        self._scaffold_worker = None
+        self._progress.setVisible(False)
+        self._set_actions_busy(False)
+        self._start_next_load()
+
+    def _regroup_scaffolds(self) -> None:
+        """Rebuild scaffold groups for the panel's current representation."""
+        representation = self._scaffold_panel.representation
+        records = list(self._table_panel.model.records)
+        groups = group_scaffolds(records, representation)
+        self._scaffold_panel.set_groups(groups, representation, self._table_panel.row_count)
+
+    def _on_scaffold_representation_changed(self, representation: ScaffoldRepresentation) -> None:
+        """Switch exact/generic: repaint the column, regroup, drop the stale filter.
+
+        The scaffold keys differ between representations, so a filter chosen
+        under one is meaningless under the other and is cleared rather than
+        silently matching nothing.
+        """
+        self._table_panel.set_scaffold_representation(representation)
+        self._table_panel.apply_scaffold_filter(None)
+        self._scaffold_panel.clear_selection()
+        self._regroup_scaffolds()
+
+    def _on_scaffold_selected(self, group: ScaffoldGroup | None) -> None:
+        """Filter the table to one scaffold's members, or clear the restriction."""
+        if group is None:
+            self._table_panel.apply_scaffold_filter(None)
+            self.statusBar().showMessage("Scaffold filter cleared", 3000)
+            return
+        self._table_panel.apply_scaffold_filter(ScaffoldFilter(group.key, group.representation))
+        self.statusBar().showMessage(
+            f"Filtered to {group.size} molecule(s) sharing {group.label}", 6000
+        )
+
+    def _show_scaffold_failures(self, report: ScaffoldReport) -> None:
+        """List molecules whose scaffold could not be computed."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Scaffolds computed with errors")
+        box.setText(
+            f"{report.n_failed} molecule(s) could not be processed.\n"
+            f"{report.computed} computed successfully."
+        )
+        details = "\n".join(report.failures[:_MAX_ERRORS_SHOWN])
+        if report.n_failed > _MAX_ERRORS_SHOWN:
+            details += f"\n… and {report.n_failed - _MAX_ERRORS_SHOWN} more (see log file)"
+        box.setDetailedText(details)
+        box.exec()
+
+    def _reset_scaffold_view(self) -> None:
+        """Clear scaffold groups and any filter after the dataset is replaced."""
+        self._table_panel.apply_scaffold_filter(None)
+        self._scaffold_panel.clear_selection()
+        self._scaffold_panel.set_groups([], ScaffoldRepresentation.MURCKO, 0)
+
+    # ------------------------------------------------------------- conformers
+    def _on_generate_conformers(self) -> None:
+        """Configure and launch 3D conformer generation.
+
+        Conformer generation is far heavier than the 2D operations, so it runs
+        on the *selection* when there is one, falling back to the whole dataset
+        only when nothing is selected.
+        """
+        if self._table_panel.row_count == 0:
+            self.statusBar().showMessage("Load molecules before generating conformers", 4000)
+            return
+        options = ConformerDialog.get_options(self)
+        if options is None:
+            return  # cancelled
+
+        selected = self._table_panel.selected_records()
+        records = selected if selected else list(self._table_panel.model.records)
+        scope = "selection" if selected else "dataset"
+        self._begin_run(
+            len(records),
+            f"Generating conformers for {len(records)} molecule(s) ({scope})…",
+        )
+
+        worker = FunctionWorker(generate_conformers, records, options, inject_progress=True)
+        worker.signals.progress.connect(self._on_load_progress)
+        worker.signals.finished.connect(self._on_conformers_finished)
+        worker.signals.error.connect(self._on_conformers_error)
+        self._conf_worker = worker
+        QThreadPool.globalInstance().start(worker)
+        logger.info("Started conformer generation for %d record(s)", len(records))
+
+    def _on_conformers_finished(self, report: ConformerReport) -> None:
+        """Show conformers for the current molecule and report the run."""
+        # Conformers were cached on the record objects the table holds. Show them
+        # for whatever is selected (or the first record after a dataset run).
+        selected = self._table_panel.selected_records()
+        records = self._table_panel.model.records
+        to_show = selected[0] if selected else (records[0] if records else None)
+        if to_show is not None:
+            self._conformer_panel.set_record(to_show)
+        self._conformer_dock.raise_()
+        self.statusBar().showMessage(
+            f"Conformers: {report.computed} molecule(s), {report.total_conformers} conformer(s), "
+            f"{report.reused} reused, {report.n_failed} failure(s) — see the Conformers panel",
+            10000,
+        )
+        if report.failures:
+            self._show_conformer_failures(report)
+        self._finish_conformers()
+
+    def _on_conformers_error(self, message: str) -> None:
+        """Report a whole-run failure (per-molecule problems are handled inline)."""
+        QMessageBox.warning(self, "Conformer generation failed", message)
+        self._finish_conformers()
+
+    def _finish_conformers(self) -> None:
+        """Reset UI state after conformer generation and resume any queued loads."""
+        self._conf_worker = None
+        self._progress.setVisible(False)
+        self._set_actions_busy(False)
+        self._start_next_load()
+
+    def _show_conformer_failures(self, report: ConformerReport) -> None:
+        """List molecules whose conformers could not be generated."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Conformers generated with errors")
+        box.setText(
+            f"{report.n_failed} molecule(s) could not be embedded.\n"
+            f"{report.computed} generated successfully."
+        )
+        details = "\n".join(report.failures[:_MAX_ERRORS_SHOWN])
+        if report.n_failed > _MAX_ERRORS_SHOWN:
+            details += f"\n… and {report.n_failed - _MAX_ERRORS_SHOWN} more (see log file)"
+        box.setDetailedText(details)
+        box.exec()
+
+    # -------------------------------------------------------- chemical space
+    def _on_chemical_space(self) -> None:
+        """Configure and launch a chemical-space projection over the dataset."""
+        if self._table_panel.row_count == 0:
+            self.statusBar().showMessage("Load molecules before projecting", 4000)
+            return
+        options = ChemicalSpaceDialog.get_options(self)
+        if options is None:
+            return  # cancelled
+
+        records = list(self._table_panel.model.records)  # snapshot for the worker
+        self._begin_run(len(records), f"Projecting {len(records)} molecule(s) — {options.label}…")
+
+        worker = FunctionWorker(project, records, options, inject_progress=True)
+        worker.signals.progress.connect(self._on_load_progress)
+        worker.signals.finished.connect(self._on_space_finished)
+        worker.signals.error.connect(self._on_space_error)
+        self._space_worker = worker
+        QThreadPool.globalInstance().start(worker)
+        logger.info("Started chemical-space projection: %s", options.label)
+
+    def _on_space_finished(self, result: ProjectionResult) -> None:
+        """Show the projection and reveal the Chemical Space dock."""
+        self._space_panel.set_projection(result)
+        # Reflect the table's current selection in the fresh plot.
+        self._space_panel.highlight_records(self._table_panel.selected_records())
+        self._space_dock.show()
+        self._space_dock.raise_()
+        self.statusBar().showMessage(
+            f"Chemical space: {result.n_points} molecule(s) projected"
+            + (f", {result.n_skipped} skipped" if result.n_skipped else "")
+            + " — hover a point, click or lasso to select",
+            10000,
+        )
+        if result.skipped:
+            self._show_space_skipped(result)
+        self._finish_space()
+
+    def _on_space_error(self, message: str) -> None:
+        """Report a whole-run failure (e.g. too few molecules to project)."""
+        QMessageBox.warning(self, "Chemical space projection failed", message)
+        self._finish_space()
+
+    def _finish_space(self) -> None:
+        """Reset UI state after a projection and resume any queued loads."""
+        self._space_worker = None
+        self._progress.setVisible(False)
+        self._set_actions_busy(False)
+        self._start_next_load()
+
+    def _show_space_skipped(self, result: ProjectionResult) -> None:
+        """List molecules left out of the projection (no usable fingerprint)."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Projected with skipped molecules")
+        box.setText(
+            f"{result.n_skipped} molecule(s) could not be projected and are absent "
+            f"from the plot.\n{result.n_points} placed successfully."
+        )
+        details = "\n".join(result.skipped[:_MAX_ERRORS_SHOWN])
+        if result.n_skipped > _MAX_ERRORS_SHOWN:
+            details += f"\n… and {result.n_skipped - _MAX_ERRORS_SHOWN} more (see log file)"
+        box.setDetailedText(details)
+        box.exec()
+
+    def _on_selection_for_space(self, _record: MoleculeRecord | None) -> None:
+        """Mirror the table's selection onto the chemical-space plot (table → plot).
+
+        Uses the full multi-row selection, not just the current record, so a
+        lasso round-trips correctly. ``highlight_records`` never emits, so this
+        cannot loop back into another table selection.
+        """
+        self._space_panel.highlight_records(self._table_panel.selected_records())
+
+    # -------------------------------------------------------------- clustering
+    def _on_cluster(self) -> None:
+        """Configure and launch clustering over the dataset."""
+        if self._table_panel.row_count == 0:
+            self.statusBar().showMessage("Load molecules before clustering", 4000)
+            return
+        options = ClusteringDialog.get_options(self)
+        if options is None:
+            return  # cancelled
+
+        records = list(self._table_panel.model.records)  # snapshot for the worker
+        self._begin_run(len(records), f"Clustering {len(records)} molecule(s) — {options.label}…")
+
+        worker = FunctionWorker(cluster_molecules, records, options, inject_progress=True)
+        worker.signals.progress.connect(self._on_load_progress)
+        worker.signals.finished.connect(self._on_cluster_finished)
+        worker.signals.error.connect(self._on_cluster_error)
+        self._cluster_worker = worker
+        QThreadPool.globalInstance().start(worker)
+        logger.info("Started clustering: %s", options.label)
+
+    def _on_cluster_finished(self, report: ClusterReport) -> None:
+        """Repaint the cluster column and colour the space map by cluster."""
+        self._table_panel.refresh_clusters()
+        # Paint the chemical-space plot by cluster so the families light up; if
+        # no projection is on screen yet, this just presets the colour choice.
+        self._space_panel.set_color_by("Cluster")
+        self.statusBar().showMessage(
+            f"Clustered {report.clustered} molecule(s) into {report.n_clusters} cluster(s) "
+            f"(largest {report.largest_cluster_size})"
+            + (f", {report.n_skipped} skipped" if report.n_skipped else "")
+            + " — sort the Cluster column, or colour the map by Cluster",
+            12000,
+        )
+        if report.skipped:
+            self._show_cluster_skipped(report)
+        self._finish_cluster()
+
+    def _on_cluster_error(self, message: str) -> None:
+        """Report a whole-run failure (e.g. too few molecules to cluster)."""
+        QMessageBox.warning(self, "Clustering failed", message)
+        self._finish_cluster()
+
+    def _finish_cluster(self) -> None:
+        """Reset UI state after clustering and resume any queued loads."""
+        self._cluster_worker = None
+        self._progress.setVisible(False)
+        self._set_actions_busy(False)
+        self._start_next_load()
+
+    def _show_cluster_skipped(self, report: ClusterReport) -> None:
+        """List molecules left out of the clustering (no usable fingerprint)."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Clustered with skipped molecules")
+        box.setText(
+            f"{report.n_skipped} molecule(s) could not be clustered and are blank "
+            f"in the Cluster column.\n{report.clustered} clustered successfully."
+        )
+        details = "\n".join(report.skipped[:_MAX_ERRORS_SHOWN])
+        if report.n_skipped > _MAX_ERRORS_SHOWN:
+            details += f"\n… and {report.n_skipped - _MAX_ERRORS_SHOWN} more (see log file)"
+        box.setDetailedText(details)
+        box.exec()
+
+    # ---------------------------------------------------------- substructure
+    def _on_substructure(self) -> None:
+        """Configure and launch a substructure search over the dataset."""
+        if self._table_panel.row_count == 0:
+            self.statusBar().showMessage("Load molecules before searching", 4000)
+            return
+        result = SubstructureDialog.get_query(self)
+        if result is None:
+            return  # cancelled, or invalid query
+        query, only_matches = result
+        self._substruct_only_matches = only_matches
+
+        records = list(self._table_panel.model.records)  # snapshot for the worker
+        self._begin_run(len(records), f"Searching {len(records)} molecule(s) for {query.label}…")
+
+        worker = FunctionWorker(search_substructure, records, query, inject_progress=True)
+        worker.signals.progress.connect(self._on_load_progress)
+        worker.signals.finished.connect(self._on_substructure_finished)
+        worker.signals.error.connect(self._on_substructure_error)
+        self._substruct_worker = worker
+        QThreadPool.globalInstance().start(worker)
+        logger.info("Started substructure search: %s", query.label)
+
+    def _on_substructure_finished(self, report: SubstructureReport) -> None:
+        """Highlight matches, refresh the column, and optionally filter."""
+        # Repaint thumbnails + column (the delegate re-highlights), re-render the
+        # selected molecule big, and apply the "matches only" filter if chosen.
+        self._table_panel.refresh_substructure()
+        self._table_panel.apply_substructure_filter(self._substruct_only_matches)
+        self._structure_panel.refresh()
+        self.statusBar().showMessage(
+            f"Substructure: {report.matched} of {report.n_records} matched {report.query.label}"
+            + (" — filtered to matches" if self._substruct_only_matches else "")
+            + (f", {report.n_failed} failed" if report.n_failed else ""),
+            12000,
+        )
+        if report.failures:
+            self._show_substructure_failures(report)
+        self._finish_substructure()
+
+    def _on_substructure_error(self, message: str) -> None:
+        """Report a whole-run failure (e.g. an unparseable query)."""
+        QMessageBox.warning(self, "Substructure search failed", message)
+        self._finish_substructure()
+
+    def _finish_substructure(self) -> None:
+        """Reset UI state after a search and resume any queued loads."""
+        self._substruct_worker = None
+        self._progress.setVisible(False)
+        self._set_actions_busy(False)
+        self._start_next_load()
+
+    def _show_substructure_failures(self, report: SubstructureReport) -> None:
+        """List molecules that could not be searched."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Search completed with errors")
+        box.setText(
+            f"{report.n_failed} molecule(s) could not be searched.\n"
+            f"{report.matched} matched the query."
+        )
+        details = "\n".join(report.failures[:_MAX_ERRORS_SHOWN])
+        if report.n_failed > _MAX_ERRORS_SHOWN:
+            details += f"\n… and {report.n_failed - _MAX_ERRORS_SHOWN} more (see log file)"
+        box.setDetailedText(details)
+        box.exec()
+
+    # ---------------------------------------------------------------- batch
+    def _on_batch(self) -> None:
+        """Configure and launch a batch pipeline over the dataset."""
+        if self._table_panel.row_count == 0:
+            self.statusBar().showMessage("Load molecules before running a batch", 4000)
+            return
+        config = BatchDialog.get_config(self)
+        if config is None or not config.has_any_step:
+            return
+
+        records = list(self._table_panel.model.records)  # snapshot for the worker
+        self._batch_cancel = threading.Event()
+        self._begin_run(len(records), f"Running batch over {len(records)} molecule(s)…")
+        self._cancel_button.setVisible(True)
+
+        worker = FunctionWorker(
+            run_batch, records, config, cancel_event=self._batch_cancel, inject_progress=True
+        )
+        worker.signals.progress.connect(self._on_load_progress)
+        worker.signals.finished.connect(self._on_batch_finished)
+        worker.signals.error.connect(self._on_batch_error)
+        self._batch_worker = worker
+        QThreadPool.globalInstance().start(worker)
+        logger.info("Started batch pipeline")
+
+    def _on_batch_finished(self, result: BatchResult) -> None:
+        """Adopt the processed dataset, reset dependent views, and report."""
+        # The pipeline may have replaced the records (standardization), so swap
+        # the whole dataset and clear everything that pointed at the old one.
+        self._table_panel.set_records(result.records)
+        self._reset_derived_views()
+
+        verb = "cancelled" if result.cancelled else "complete"
+        export_note = (
+            f", exported {result.exported} to {result.export_path.name}"
+            if result.export_path is not None
+            else ""
+        )
+        self._sources_list.addItem(f"Batch {verb}  —  {len(result.records)} molecule(s)")
+        self.statusBar().showMessage(
+            f"Batch {verb}: {len(result.records)} molecule(s){export_note}", 12000
+        )
+        self._show_batch_summary(result)
+        self._finish_batch()
+
+    def _on_batch_error(self, message: str) -> None:
+        """Report a whole-pipeline failure (per-molecule errors are handled inside)."""
+        QMessageBox.warning(self, "Batch failed", message)
+        self._finish_batch()
+
+    def _finish_batch(self) -> None:
+        """Reset UI state after a batch and resume any queued loads."""
+        self._batch_worker = None
+        self._batch_cancel = None
+        self._cancel_button.setVisible(False)
+        self._progress.setVisible(False)
+        self._set_actions_busy(False)
+        self._start_next_load()
+
+    def _on_cancel_batch(self) -> None:
+        """Ask the running batch to stop at the next safe point."""
+        if self._batch_cancel is not None:
+            self._batch_cancel.set()
+            self.statusBar().showMessage("Cancelling batch…")
+
+    def _show_batch_summary(self, result: BatchResult) -> None:
+        """Show the per-step summary of a batch run."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setWindowTitle("Batch cancelled" if result.cancelled else "Batch complete")
+        headline = "The batch was cancelled." if result.cancelled else "The batch finished."
+        box.setText(f"{headline}\n{len(result.records)} molecule(s) in the dataset.")
+        if result.summaries:
+            box.setDetailedText("\n".join(result.summaries))
+        box.exec()
+
+    # ---------------------------------------------------------------- reports
+    def _on_report(self) -> None:
+        """Configure and generate a shareable report of the dataset."""
+        if self._table_panel.row_count == 0:
+            self.statusBar().showMessage("Load molecules before generating a report", 4000)
+            return
+        config = ReportDialog.get_config(self)
+        if config is None:
+            return
+
+        records = list(self._table_panel.model.records)  # snapshot for the worker
+        self._begin_run(len(records), f"Generating report for {len(records)} molecule(s)…")
+
+        worker = FunctionWorker(generate_report, records, config, inject_progress=True)
+        worker.signals.progress.connect(self._on_load_progress)
+        worker.signals.finished.connect(self._on_report_finished)
+        worker.signals.error.connect(self._on_report_error)
+        self._report_worker = worker
+        QThreadPool.globalInstance().start(worker)
+        logger.info("Started report generation: %s", ", ".join(config.formats))
+
+    def _on_report_finished(self, result: ReportResult) -> None:
+        """Report the written files and offer to open one."""
+        names = ", ".join(p.name for p in result.paths)
+        self._sources_list.addItem(f"Report  —  {names}")
+        self.statusBar().showMessage(f"Report written: {names}", 10000)
+
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setWindowTitle("Report generated")
+        box.setText(
+            f"Wrote {len(result.paths)} file(s) for {result.n_molecules} molecule(s):\n"
+            + "\n".join(str(p) for p in result.paths)
+        )
+        open_button = box.addButton("Open", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Close", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is open_button and result.paths:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(result.paths[0].resolve())))
+        self._finish_report()
+
+    def _on_report_error(self, message: str) -> None:
+        """Report a failure to generate the report."""
+        QMessageBox.warning(self, "Report generation failed", message)
+        self._finish_report()
+
+    def _finish_report(self) -> None:
+        """Reset UI state after a report and resume any queued loads."""
+        self._report_worker = None
+        self._progress.setVisible(False)
+        self._set_actions_busy(False)
+        self._start_next_load()
+
+    # ---------------------------------------------------------------- settings
+    def _on_settings(self) -> None:
+        """Open the Settings dialog and apply + persist any changes."""
+        new_config = SettingsDialog.edit(self._config, self)
+        if new_config is None:
+            return  # cancelled
+
+        if new_config.theme != self._theme_manager.current:
+            self._theme_manager.apply(new_config.theme)  # emits theme_changed
+        if new_config.log_level != self._config.log_level:
+            setup_logging(new_config.log_level)
+
+        self._config = new_config
+        try:
+            save_config(new_config)
+        except OSError:
+            logger.exception("Failed to save settings")
+            self.statusBar().showMessage("Could not save settings (see log)", 5000)
+        else:
+            self.statusBar().showMessage("Settings saved", 4000)
+
+    def _restore_window_state(self) -> None:
+        """Restore the saved window geometry and dock layout, if enabled.
+
+        Runs after the resize to the config default size, so a saved geometry
+        wins and a first run falls back to the default. ``restoreState`` relies
+        on every dock and the toolbar having an ``objectName`` (they do).
+        """
+        if not self._config.remember_window_geometry:
+            return
+        settings = QSettings()
+        geometry = settings.value("geometry")
+        if geometry is not None:
+            self.restoreGeometry(geometry)
+        state = settings.value("windowState")
+        if state is not None:
+            self.restoreState(state)
+
+    def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 — Qt override
+        """Persist theme and window layout before the window closes."""
+        # The runtime theme toggle is transient until now; capture it here so it
+        # survives a restart without writing to disk on every toggle.
+        self._config = self._config.with_overrides(theme=self._theme_manager.current)
+        try:
+            save_config(self._config)
+            settings = QSettings()
+            if self._config.remember_window_geometry:
+                settings.setValue("geometry", self.saveGeometry())
+                settings.setValue("windowState", self.saveState())
+            else:
+                # Disabled: clear any stored layout so it does not linger.
+                settings.remove("geometry")
+                settings.remove("windowState")
+        except OSError:
+            logger.exception("Failed to persist settings on close")
+        super().closeEvent(event)
+
     def _on_toggle_theme(self) -> None:
         """Switch themes and report the result in the status bar."""
         new_theme = self._theme_manager.toggle()
@@ -422,14 +1503,34 @@ class MainWindow(QMainWindow):
         dark = theme == "dark"
         self._table_panel.set_dark(dark)
         self._structure_panel.set_dark(dark)
+        self._scaffold_panel.set_dark(dark)
+        self._conformer_panel.set_dark(dark)
+        self._space_panel.set_dark(dark)
 
     def _on_about(self) -> None:
-        """Display the About dialog."""
+        """Display the About dialog with developer and organization info."""
+        # Build the developer credits section from constants.DEVELOPERS.
+        dev_lines: list[str] = []
+        for dev in constants.DEVELOPERS:
+            emails = dev.get("emails", [])
+            email_links = ", ".join(
+                f'<a href="mailto:{e}">{e}</a>' for e in emails
+            )
+            dev_lines.append(f"<b>{dev['name']}</b><br/>{email_links}")
+        developers_html = "<br/><br/>".join(dev_lines)
+
         QMessageBox.about(
             self,
             f"About {constants.APP_NAME}",
             f"<h3>{constants.APP_NAME} {constants.APP_VERSION}</h3>"
             f"<p>{constants.APP_DESCRIPTION}</p>"
+            f"<hr/>"
+            f"<p><b>Organization:</b> {constants.ORG_NAME}<br/>"
+            f'<a href="{constants.ORG_URL}">{constants.ORG_URL}</a></p>'
+            f"<hr/>"
+            f"<p><b>Developers:</b></p>"
+            f"<p>{developers_html}</p>"
+            f"<hr/>"
             f"<p>License: {constants.LICENSE}</p>"
             f'<p><a href="{constants.PROJECT_URL}">{constants.PROJECT_URL}</a></p>',
         )
