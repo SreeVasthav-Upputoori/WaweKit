@@ -1,4 +1,4 @@
-"""Divergence analysis: does standardization agree across protocols, and why not?
+"""Divergence analysis: whether standardization agrees across protocols, and why not.
 
 Given a molecule and a set of protocols (R1), this module answers two questions:
 
@@ -236,10 +236,13 @@ def analyze_divergence(
     """
     run = DivergenceRun(protocols=protocols)
     total = len(records)
-    logger.info("Analyzing divergence for %d molecule(s) across %d protocol(s)", total, len(protocols))
+    logger.info(
+        "Analyzing divergence for %d molecule(s) across %d protocol(s)", total, len(protocols)
+    )
 
     for done, (name, mol) in enumerate(records, start=1):
-        run.results.append(analyze_molecule(mol, protocols, name=name, attribute_causes=attribute_causes))
+        result = analyze_molecule(mol, protocols, name=name, attribute_causes=attribute_causes)
+        run.results.append(result)
         if progress is not None:
             progress(done, total)
 
