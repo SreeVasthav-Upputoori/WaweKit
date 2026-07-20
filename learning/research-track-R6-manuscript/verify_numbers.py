@@ -29,6 +29,14 @@ RESULTS = BENCH / "chembl_results.json"
 #: waived — otherwise the comparison section would be the one place in the
 #: paper where numbers go unchecked.
 PILOT_OUTPUT = BENCH / "benchmark_output.txt"
+#: §3.5's sensitivity analysis re-runs the audit with one operation disabled,
+#: producing its own results file. Registered here for the same reason as the
+#: pilot: a number the paper quotes must be checkable against the run that
+#: produced it, not exempted because it came from a variant analysis.
+SENSITIVITY = BENCH / "chembl_sensitivity_nostereo.json"
+#: §3.7's downstream experiment — merge counts, dataset losses, activity
+#: spreads and QSAR scores — lives in its own results file.
+DOWNSTREAM = HERE.parent / "research-track-R7-downstream" / "downstream_results.json"
 TOLERANCE = 0.0006  # quoted to 1 d.p. as a percentage
 
 
@@ -97,13 +105,83 @@ def collect_pilot_values() -> tuple[set[float], set[int]]:
     return props, counts
 
 
+def collect_sensitivity_values() -> tuple[set[float], set[int]]:
+    """Values from the one-operation-disabled sensitivity run (§3.5)."""
+    props: set[float] = set()
+    counts: set[int] = set()
+    if not SENSITIVITY.is_file():
+        return props, counts
+    res = json.loads(SENSITIVITY.read_text(encoding="utf-8"))
+    props.add(round(res["smiles"], 6))
+    props.add(round(res["inchikey"], 6))
+    n_labile = res["n_labile"]
+    counts.add(n_labile)
+    counts.add(res["n"])
+    if res["n"]:
+        props.add(round(n_labile / res["n"], 6))
+    for frac in res["causes"].values():
+        props.add(round(frac, 6))
+        counts.add(round(frac * n_labile))
+    return props, counts
+
+
+def collect_downstream_values() -> tuple[set[float], set[int]]:
+    """Values from the downstream-impact experiment (§3.7)."""
+    props: set[float] = set()
+    counts: set[int] = set()
+    if not DOWNSTREAM.is_file():
+        return props, counts
+    res = json.loads(DOWNSTREAM.read_text(encoding="utf-8"))
+    for per_protocol in res.values():
+        n_min = min(
+            (
+                s["n_identities"]
+                for s in per_protocol.values()
+                if isinstance(s, dict) and "n_identities" in s
+            ),
+            default=0,
+        )
+        n_max = max(
+            (s.get("n_input", 0) for s in per_protocol.values() if isinstance(s, dict)),
+            default=0,
+        )
+        if n_max:
+            # Fraction of the dataset lost to merging, as the prose quotes it.
+            props.add(round((n_max - n_min) / n_max, 6))
+        for stats in per_protocol.values():
+            if not isinstance(stats, dict):
+                continue
+            for key in ("n_identities", "n_merged_groups", "n_input", "n_compounds_in_merges"):
+                if key in stats:
+                    counts.add(int(stats[key]))
+            for key, val in stats.items():
+                if key.startswith("discordant_at_"):
+                    counts.add(int(val))
+                    if stats.get("n_identities"):
+                        props.add(round(val / stats["n_identities"], 6))
+            if "max_spread" in stats:
+                props.add(round(stats["max_spread"], 6))
+            for block in ("qsar_full", "qsar_matched"):
+                q = stats.get(block)
+                if isinstance(q, dict):
+                    counts.add(int(q["n_examples"]))
+                    for metric in ("rmse_mean", "rmse_sd", "r2_mean", "spearman_mean"):
+                        if metric in q:
+                            props.add(round(q[metric], 6))
+    return props, counts
+
+
 def main(path: Path) -> int:
     sys.path.insert(0, str(BENCH))
     res = json.loads(RESULTS.read_text(encoding="utf-8"))
     props, counts = collect_known_values(res)
-    pilot_props, pilot_counts = collect_pilot_values()
-    props |= pilot_props
-    counts |= pilot_counts
+    for extra_props, extra_counts in (
+        collect_pilot_values(),
+        collect_sensitivity_values(),
+        collect_downstream_values(),
+    ):
+        props |= extra_props
+        counts |= extra_counts
 
     text = path.read_text(encoding="utf-8")
     # Only check the results-bearing body, not the reference list.

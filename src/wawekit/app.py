@@ -24,7 +24,20 @@ import sys
 import time
 from pathlib import Path
 
-from PySide6.QtWidgets import QApplication
+try:
+    from PySide6.QtWidgets import QApplication
+except ImportError as exc:  # pragma: no cover — depends on how the user installed
+    # Qt lives in the optional [gui] extra so that `pip install wawekit` stays a
+    # lightweight headless library (see pyproject). Someone who installed it
+    # that way and then ran `wawekit` deserves a one-line instruction rather
+    # than an import traceback pointing into PySide6.
+    raise SystemExit(
+        "The WaweKit desktop application requires the optional GUI dependencies.\n"
+        "Install them with:\n\n"
+        "    pip install 'wawekit[gui]'\n\n"
+        "The analysis library and the reproducibility auditor work without them, e.g.\n"
+        "    python -m wawekit.services.reproducibility.benchmark molecules.smi"
+    ) from exc
 
 from wawekit.core import constants
 from wawekit.core.config import load_config

@@ -23,23 +23,37 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Chemistry",
 ]
 
-# Runtime dependencies. Pin lower bounds; let resolvers pick compatible upgrades.
+# Runtime dependencies: the headless science layer only.
+#
+# The desktop UI is deliberately NOT a core dependency. Every analysis service
+# — standardization, the reproducibility auditor, descriptors, fingerprints,
+# similarity, scaffolds, clustering, chemical-space projection, substructure
+# search, alerts, IO and reporting — imports without Qt, so `pip install
+# wawekit` gives a usable library and CLI without pulling a ~150 MB GUI
+# framework someone scripting in a notebook will never open. Only
+# `core.paths` and `services.workers` (app config directories and the Qt
+# thread pool) require Qt, and both are GUI infrastructure rather than
+# science. Install `wawekit[gui]` for the desktop application.
 dependencies = [
-    "PySide6>=6.6",
     "rdkit>=2024.3.1",
     "numpy>=1.26",
     "pandas>=2.2",
-    # Chemical-space projection (Module 10) and clustering (Module 11) make these
-    # load-bearing, so they are core rather than optional science extras.
-    "matplotlib>=3.8",
+    # Chemical-space projection and clustering are headless services.
     "scikit-learn>=1.4",
-    # Report generation (Module 14) — PDF output.
+    # Report generation — PDF output, no Qt involved.
     "reportlab>=4.1",
 ]
 
 [project.optional-dependencies]
+# The desktop application: Qt plus the plotting backend the panels embed.
+gui = [
+    "PySide6>=6.6",
+    "matplotlib>=3.8",
+]
 # Installed with:  pip install -e ".[dev]"
+# Includes [gui] because the test suite covers the desktop application.
 dev = [
+    "wawekit[gui]",
     "pytest>=8.0",
     "pytest-qt>=4.4",
     "black>=24.0",

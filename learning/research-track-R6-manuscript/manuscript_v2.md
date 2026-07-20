@@ -33,8 +33,21 @@ canonicalization (22.1%), with charge and fragment handling accounting for
 under 10% combined. We show that this spectrum is a joint property of dataset
 composition and protocol contrast rather than an intrinsic ranking of
 operations, and that a hand-assembled benchmark inverts it — an argument for
-auditing the dataset actually in use. The method and an open-source reference
-implementation are released as part of WaweKit.
+auditing the dataset actually in use.
+
+To establish whether such divergence carries a practical cost, we applied the
+same protocols to 27,152 IC50 measurements across four targets. Because
+grouping by standardized identity is what deduplication does, protocol choice
+silently changes a dataset: the most aggressive protocol removed up to 9.5% of
+compounds by merging, and fused compounds whose measured activities differ by
+up to three log units — a thousandfold difference in potency, and on a
+cardiac-safety endpoint — into single training labels. Yet cross-validated
+model performance was statistically indistinguishable across protocols on all
+four targets. Standardization choice therefore corrupts specific labels while
+leaving the aggregate metrics used to validate pipelines unchanged, so
+unchanged model performance is not evidence that a standardization change was
+safe. The method and an open-source reference implementation are released as
+part of WaweKit.
 
 ---
 
@@ -239,7 +252,56 @@ must be disclosed: records adjacent in ChEMBL's ordering frequently originate
 from the same publication or assay series, so blocks may contain structurally
 related analogues. §3.1 reports the realised effect.
 
-### 2.6 Implementation and availability
+### 2.6 Downstream-impact experiment
+
+Measuring divergence does not establish that it costs anything. To test that,
+the same protocols were applied to bioactivity data and the consequences
+measured at three levels: dataset composition, label integrity, and model
+performance.
+
+**Data.** IC50 measurements were retrieved from ChEMBL for four targets chosen
+to span cases where standardization should and should not be damaging: the
+μ-opioid receptor (CHEMBL233), whose pharmacology is strongly enantioselective
+and which should therefore be maximally sensitive to stereochemistry removal;
+EGFR (CHEMBL203) and VEGFR2 (CHEMBL279) as conventional kinase datasets; and
+hERG (CHEMBL240), a cardiac-safety endpoint where a mislabelled compound
+carries direct consequence. Only exact-relation (`=`) IC50 values in nM were
+retained, since censored values cannot serve as regression targets; these were
+converted to pIC50 and replicate measurements per structure reduced to their
+median. This yielded 27,152 usable measurements.
+
+**Merging and discordance.** Standardizing under a protocol and grouping by the
+resulting identity is precisely the operation deduplication performs, so each
+protocol produces its own version of the same nominal dataset. A group
+containing more than one distinct input structure is a **merge**. A merge is
+**discordant** if the merged compounds' measured activities span more than one
+log unit — the conventional activity-cliff scale — and results are reported
+across a range of thresholds (0.5–2.0 log units) so no conclusion rests on that
+single cut. A discordant merge is not a bookkeeping artefact: whatever
+aggregation follows assigns the group an activity that none of its members
+possesses.
+
+**Model performance.** Each protocol's dataset was modelled identically:
+Morgan fingerprints (radius 2, 2048 bits) **including chirality**, and
+random-forest regression (200 trees), evaluated by five-fold cross-validation
+repeated over three random seeds. Chirality is deliberately encoded — with an
+achiral fingerprint, enantiomers are already indistinguishable to the model and
+stereochemistry removal could not alter the features, so the experiment would
+answer a question nobody asked.
+
+Comparing across protocols requires care, because each protocol yields a
+differently-sized dataset and size confounds performance. The apparently
+obvious control — restricting to identities common to all protocols — is
+invalid here, and the reason generalises to any such comparison: identities are
+InChIKeys *of the standardized structure*, so a molecule that a protocol
+actually changed receives a different key under that protocol. Intersecting the
+keysets therefore selects exactly the molecules on which all protocols agreed,
+where every protocol's dataset is identical by construction and no difference
+can exist. We instead subsample each protocol's dataset to the smallest
+dataset's size with a fixed seed, holding size constant while standardization
+varies.
+
+### 2.7 Implementation and availability
 
 The measurement pipeline — protocol engine, divergence analysis, metrics, and a
 command-line benchmark harness — is implemented in Python 3.13.2 against RDKit
@@ -367,7 +429,41 @@ standardization operation in general."* The cause spectrum is a property of the
 comparison, and it is only interpretable alongside the composition table in
 §3.1.
 
-### 3.5 Comparison with a hand-assembled benchmark
+### 3.5 Sensitivity to a single protocol design choice
+
+Because §3.4 shows the cause spectrum to be a property of the comparison rather
+than of the operations, the natural test is to change the comparison. Repeating
+the audit with stereochemistry removal disabled in the Aggressive protocol —
+leaving all else identical — gives:
+
+| Metric | Full comparison | Without stereochemistry removal |
+|---|---|---|
+| Reproducible under canonical SMILES | 54.1% | 75.5% |
+| Reproducible under InChIKey | 57.7% | 80.1% |
+| Divergent molecules | 2280 (45.9%) | 1218 (24.5%) |
+| Leading cause | stereochemistry, 66.6% | tautomer, 87.4% |
+
+One operation toggle moves headline reproducibility by more than twenty
+percentage points. This is the quantitative form of the §3.4 argument: a
+reproducibility figure is uninterpretable without the protocol set that
+produced it, and small differences in protocol specification produce large
+differences in the reported result.
+
+Two internal checks support the comparison. The absolute counts for the
+operations unrelated to stereochemistry are unchanged (fragment selection 192,
+charge neutralization 26, isotope removal 6, normalization 2 in both runs);
+their fractions rise only because the divergent denominator shrinks, as
+expected when an unrelated operation is removed. And the unattributed count
+falls to zero, indicating that all 278 jointly-caused molecules in the full
+comparison involved stereochemistry interacting with another operation.
+
+With stereochemistry held constant, tautomer canonicalization accounts for
+87.4% of the remaining divergence — consistent in direction with PubChem's
+attribution of its own pipeline/InChI disagreement primarily to tautomeric
+form [3], obtained here by an independent route and with per-operation
+resolution.
+
+### 3.6 Comparison with a hand-assembled benchmark
 
 An earlier 40-molecule set, assembled deliberately to span structural classes
 hypothesized to be labile (salts, charged species, tautomer-ambiguous
@@ -386,27 +482,125 @@ Generic benchmarks cannot substitute for auditing one's own data — which is th
 central practical argument for making such an audit cheap enough to run
 routinely.
 
+### 3.7 Downstream consequences: what divergence costs
+
+Sections 3.2–3.6 establish that protocols disagree and why. They do not
+establish that the disagreement matters. To test that, we applied the same
+three protocols to real bioactivity data and measured what a modeller would
+actually experience.
+
+The experiment applies the three protocols to 27,152 IC50 measurements across
+four targets and measures dataset composition, label integrity and model
+performance; the design, including why the obvious size control is invalid, is
+given in §2.6.
+
+**Merging is substantial and destroys real differences.**
+
+| Target | Compounds | ChEMBL-like merges / discordant | Aggressive merges / discordant | Compounds lost | Widest merge |
+|---|---|---|---|---|---|
+| μ-opioid | 1262 | 7 / 0 | 98 / 20 | 9.5% | 2.64 log |
+| EGFR | 5558 | 41 / 2 | 131 / 17 | 2.6% | 2.93 log |
+| hERG | 6401 | 25 / 2 | 217 / 16 | 4.1% | 3.00 log |
+| VEGFR2 | 7056 | 54 / 2 | 137 / 7 | 2.4% | 1.60 log |
+
+The direction is consistent across all four targets: the Aggressive protocol
+merges between 2.5 and 14 times as many groups as ChEMBL-like, and always
+produces more discordant merges. On hERG two separate merges each fused
+compounds differing by exactly 3.00 log units — a thousandfold difference in
+cardiotoxic liability collapsed into a single training label on a safety
+endpoint.
+
+Two features of this table are worth separating. First, the μ-opioid dataset
+loses 9.5% of its compounds, roughly four times the proportion lost by either
+kinase set. This is the predicted consequence of enantioselective
+pharmacology: a compound collection rich in stereoisomer pairs with genuinely
+different activity is exactly the collection that stereochemistry-stripping
+collapses. Second, VEGFR2 is comparatively mild (7 discordant merges, widest
+merge 1.60 log). The harm is therefore **target-dependent and predictable from
+the pharmacology**, not a uniform penalty — which is the argument for auditing
+a specific dataset rather than applying a general rule.
+
+**Aggregate model performance is unaffected.** Random-forest regression on
+chirality-aware Morgan fingerprints, evaluated by repeated five-fold
+cross-validation over three seeds and compared at matched dataset size, shows
+no protocol effect:
+
+| Target | Minimal | ChEMBL-like | Aggressive |
+|---|---|---|---|
+| μ-opioid | 0.753 ± 0.037 | 0.753 ± 0.049 | 0.742 ± 0.061 |
+| EGFR | 0.729 ± 0.018 | 0.719 ± 0.022 | 0.726 ± 0.028 |
+| hERG | 0.627 ± 0.030 | 0.631 ± 0.023 | 0.631 ± 0.021 |
+| VEGFR2 | 0.643 ± 0.017 | 0.643 ± 0.017 | 0.651 ± 0.015 |
+
+(RMSE in pIC50 units, mean ± SD across cross-validation folds; Figure 4.)
+
+Every between-protocol difference is smaller than the fold-to-fold variation
+within a single protocol, on all four targets. Even on the μ-opioid set, where
+1.75% of final training labels are corrupted — five times the rate of any other
+target — the Aggressive protocol's RMSE is nominally *lower* than Minimal's.
+
+We also tested whether corruption inflates the *variance* of model performance
+rather than its mean. The standard deviation rose with merge count on two
+targets (EGFR 0.018→0.028, μ-opioid 0.037→0.061) but fell on the other two
+(hERG 0.030→0.021, VEGFR2 0.017→0.015). With no consistent direction across
+targets, this is what sampling noise in a standard deviation estimated from
+fifteen folds looks like, and we do not claim a variance effect.
+
+**Interpretation.** These two results are only surprising together. Protocol
+choice demonstrably corrupts training data — deleting up to 9.5% of a dataset
+and fabricating labels for compounds that differ thousandfold in potency —
+while leaving the aggregate metrics by which pipelines are usually validated
+entirely unmoved. The practical consequence is a negative one, and it is the
+most directly actionable finding in this work:
+
+> Observing that a model's cross-validated performance did not change is
+> **not** evidence that a standardization change was safe.
+
+The damage is concentrated in individual compounds rather than distributed
+across the dataset, so it surfaces where individual compounds matter — a
+specific prediction, an activity-cliff analysis, a series' SAR interpretation,
+a safety call on one molecule — and is invisible to a summary statistic
+computed over thousands. Detecting it requires inspecting the merges, which is
+what the audit reported here does.
+
 ---
 
 ## 4. Discussion
 
 ### 4.1 Practical implications
 
-Three findings bear directly on curation practice.
+Four findings bear directly on curation practice.
 
-First, **identity convention must be reported.** A dataset that is 57.7%
+First, and most consequentially, **an unchanged evaluation metric does not
+license a standardization change.** The downstream experiment (§3.7) found
+protocol choice deleting up to 9.5% of a dataset and fusing thousandfold
+potency differences into single labels while cross-validated error moved less
+than fold-to-fold noise on all four targets. The usual way a practitioner
+validates a pipeline change — swap it in, check the model still scores the same
+— is therefore blind to precisely this class of error. Because the damage is
+concentrated in a small number of compounds rather than spread across the
+dataset, it survives averaging. Detecting it requires inspecting the merges,
+which is what an audit does and a summary statistic cannot.
+
+Second, **identity convention must be reported.** A dataset that is 57.7%
 reproducible under InChIKey is 54.1% reproducible under canonical SMILES;
 "we deduplicated by InChIKey" and "we standardized structures identically" are
 different claims, and the gap is concentrated exactly where tautomer ambiguity
 is common.
 
-Second, **protocol distance does not predict disagreement.** Two protocols
+Third, **protocol distance does not predict disagreement.** Two protocols
 differing by four operations agreed on 96.1% of molecules while two differing by
 three agreed on 60.0%. What matters is the interaction between the differing
 operations and the composition of the dataset, which cannot be known in advance
-and must be measured on the data at hand.
+and must be measured on the data at hand. The downstream results sharpen this
+into a chemical statement: the μ-opioid set, whose pharmacology is
+enantioselective, lost 9.5% of its compounds to merging and carried five times
+the corrupted-label rate of any other target, because a collection rich in
+stereoisomer pairs with genuinely different activity is exactly the collection
+that stereochemistry removal collapses. Which operations are dangerous is a
+property of the pharmacology at hand, and is predictable once stated.
 
-Third, **the dominant divergence cause is not the one the literature
+Fourth, **the dominant divergence cause is not the one the literature
 emphasises.** Tautomer canonicalization is the most discussed standardization
 ambiguity [3, 4], and it is substantial here (22.1%), but stereochemistry
 handling accounts for three times as much divergence in this sample. That is a
@@ -461,15 +655,32 @@ follow-up and have not performed it here.
    et al. [4], which provides experimentally annotated tautomeric tuples, is a
    natural substrate for measuring attribution precision and recall; this
    remains future work.
+7. **The downstream null is bounded by what it tested.** The absence of a
+   detectable effect on model performance (§3.7) holds for one model family
+   (random forest on circular fingerprints), one task type (single-target
+   regression on pIC50) and one evaluation protocol (random-split
+   cross-validation). Corrupted labels could plausibly matter more under a
+   scaffold or time split, which stress generalisation rather than
+   interpolation; in classification near a decision threshold; or for
+   few-shot and active-learning regimes where individual labels carry far more
+   weight. The claim is that aggregate random-split regression metrics do not
+   detect this corruption — not that no analysis can.
+8. **Discordance threshold.** Labelling a merge "discordant" above one log unit
+   is a convention. Counts at 0.5–2.0 log units are recorded alongside, but the
+   headline figures use the single conventional cut.
 
 ### 4.4 Future work
 
-The priorities, in order: run the identical audit on an uncurated structure
-source to quantify the pre-curation confound (§4.2); validate attribution
-accuracy against the annotated tautomer database [4]; extend the protocol model
-across toolkits so that cross-implementation divergence becomes measurable; and
-replace cluster sampling with a simple random sample from a database dump to
-remove the design effect.
+The priorities, in order: extend the protocol model across toolkits so that
+cross-implementation divergence becomes measurable, since the PubChem/InChI
+comparison [3] suggests that is where the largest disagreement lies; run the
+identical audit on an uncurated structure source to quantify the pre-curation
+confound (§4.2); test whether the downstream null survives evaluation designs
+that stress generalisation, particularly scaffold and time splits, where a
+handful of corrupted labels in a held-out series could matter considerably more
+than they do under random splitting; validate attribution accuracy against the
+annotated tautomer database [4]; and replace cluster sampling with a simple
+random sample from a database dump to remove the design effect.
 
 ---
 
@@ -482,7 +693,15 @@ canonical-SMILES identity and 57.7% under InChIKey identity. Ablation attributed
 two thirds of the divergence to stereochemistry handling and a further fifth to
 tautomer canonicalization, while showing that this ranking is a property of the
 protocols compared and the data audited rather than an intrinsic ordering —
-demonstrated directly by a hand-assembled benchmark that inverts it. We release
+demonstrated directly by a hand-assembled benchmark that inverts it.
+
+Applied to bioactivity data, the same protocol choice removed up to 9.5% of a
+dataset by merging and fused thousandfold potency differences — including on a
+cardiac-safety endpoint — into single training labels, while leaving
+cross-validated model performance statistically unchanged on all four targets
+tested. Standardization choice is therefore capable of corrupting a dataset in
+ways the metrics ordinarily used to validate pipelines cannot see, which makes
+an explicit audit the only reliable way to detect it. We release
 the method and its implementation openly so that a reproducibility audit can
 become a routine, reportable step in dataset curation rather than an
 unexamined assumption.
@@ -502,6 +721,14 @@ implicate several operations.
 
 **Figure 3.** Headline reproducibility under each identity convention, with 95%
 Wilson intervals.
+
+**Figure 4.** Downstream consequences of protocol choice across four bioactivity
+datasets. Left: discordant merges — training labels fabricated by fusing
+compounds whose measured activities differ by more than one log unit —
+normalised per 1000 compounds. Right: cross-validated model error for the same
+data under each protocol, with fold-to-fold standard deviation. The two panels
+must be read together: the corruption on the left is real and, on the μ-opioid
+set, substantial, yet it leaves the performance on the right unchanged.
 
 ---
 
