@@ -25,6 +25,7 @@ from pathlib import Path
 from PySide6.QtCore import QSettings, Qt, QThreadPool, QUrl
 from PySide6.QtGui import (
     QAction,
+    QActionGroup,
     QCloseEvent,
     QDesktopServices,
     QDragEnterEvent,
@@ -37,6 +38,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QListWidget,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QProgressBar,
     QPushButton,
@@ -50,8 +52,11 @@ from wawekit.gui.dialogs.batch_dialog import BatchDialog
 from wawekit.gui.dialogs.chemical_space_dialog import ChemicalSpaceDialog
 from wawekit.gui.dialogs.clustering_dialog import ClusteringDialog
 from wawekit.gui.dialogs.conformer_dialog import ConformerDialog
+from wawekit.gui.dialogs.converter_dialog import ConverterDialog
 from wawekit.gui.dialogs.fingerprint_dialog import FingerprintDialog
+from wawekit.gui.dialogs.manual_dialog import ManualDialog
 from wawekit.gui.dialogs.report_dialog import ReportDialog
+from wawekit.gui.dialogs.reproducibility_dialog import ReproducibilityDialog
 from wawekit.gui.dialogs.settings_dialog import SettingsDialog
 from wawekit.gui.dialogs.similarity_dialog import SimilarityDialog
 from wawekit.gui.dialogs.standardize_dialog import StandardizeDialog
@@ -62,12 +67,18 @@ from wawekit.gui.widgets.chemical_space_panel import ChemicalSpacePanel
 from wawekit.gui.widgets.conformer_panel import ConformerPanel
 from wawekit.gui.widgets.molecule_filter import ScaffoldFilter
 from wawekit.gui.widgets.molecule_table import MoleculeTablePanel
+from wawekit.gui.widgets.property_filter_panel import PropertyFilterPanel
+from wawekit.gui.widgets.reproducibility_panel import ReproducibilityPanel
 from wawekit.gui.widgets.scaffold_panel import ScaffoldPanel
 from wawekit.gui.widgets.structure_viewer import StructureViewerPanel
+from wawekit.gui.widgets.viewer_3d_panel import Viewer3DPanel
 from wawekit.models.fingerprints import FingerprintOptions
 from wawekit.models.molecule import MoleculeRecord
 from wawekit.models.scaffold import ScaffoldRepresentation
+from wawekit.plugins.base import PluginContext
+from wawekit.plugins.manager import load_plugins
 from wawekit.services.batch import BatchResult, run_batch
+from wawekit.services.chemistry.alerts import AlertReport, compute_alerts_for_records
 from wawekit.services.chemistry.chemical_space import (
     ProjectionResult,
     project,
@@ -113,6 +124,11 @@ from wawekit.services.io.molecule_loader import (
 )
 from wawekit.services.io.molecule_loader import load_file as load_molecule_file
 from wawekit.services.reporting import ReportResult, generate_report
+from wawekit.services.reproducibility import (
+    DivergenceRun,
+    analyze_divergence,
+    compute_metrics,
+)
 from wawekit.services.workers import FunctionWorker
 
 logger = logging.getLogger(__name__)
@@ -168,10 +184,20 @@ class MainWindow(QMainWindow):
         self._batch_cancel: threading.Event | None = None
         # Report-generation worker (ditto).
         self._report_worker: FunctionWorker | None = None
+        # Reproducibility-audit worker (ditto). Research feature (see
+        # services/reproducibility) — not part of the core 20-module roadmap.
+        self._repro_worker: FunctionWorker | None = None
+        # Background structural-alerts worker. Deliberately NOT part of the
+        # busy-guard set: it runs automatically and unobtrusively after a
+        # load/standardize/batch, and other actions should stay available
+        # while it finishes (see _start_background_alerts).
+        self._alerts_worker: FunctionWorker | None = None
         # Encoding used by the last search, so the dialog reopens on it rather
         # than on the defaults — re-encoding a dataset behind the user's back is
         # exactly the silent mixing Module 6 was about.
         self._last_fingerprint: FingerprintOptions | None = None
+        # The (non-modal) user manual, created lazily on first Help → Manual.
+        self._manual_dialog: ManualDialog | None = None
 
         self.setWindowTitle(f"{constants.APP_NAME} {constants.APP_VERSION}")
         self.resize(config.window_width, config.window_height)
@@ -184,6 +210,7 @@ class MainWindow(QMainWindow):
         self._build_toolbar()
         self._build_statusbar()
         self._restore_window_state()
+        self._load_plugins()
 
         logger.info("Main window constructed")
 
@@ -243,6 +270,18 @@ class MainWindow(QMainWindow):
         self._workspace_dock.raise_()  # Workspace is the default-visible tab
         self._scaffold_dock = scaffold_dock
 
+        # Property Filters dock: range inputs. Tabbed with Workspace on the left.
+        filters_dock = QDockWidget("Property Filters", self)
+        filters_dock.setObjectName("propertyFilterDock")
+        filters_dock.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
+        )
+        self._property_filter_panel = PropertyFilterPanel(parent=filters_dock)
+        filters_dock.setWidget(self._property_filter_panel)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, filters_dock)
+        self.tabifyDockWidget(self._workspace_dock, filters_dock)
+        self._filters_dock = filters_dock
+
         # Conformers dock: the 3D viewer + energy table. Tabbed with Structure on
         # the right, since both follow the current molecule selection.
         conformer_dock = QDockWidget("Conformers", self)
@@ -256,8 +295,23 @@ class MainWindow(QMainWindow):
         conformer_dock.setWidget(self._conformer_panel)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, conformer_dock)
         self.tabifyDockWidget(self._structure_dock, conformer_dock)
-        self._structure_dock.raise_()  # Structure is the default-visible right tab
         self._conformer_dock = conformer_dock
+
+        # 3D Viewer dock: standalone interactive 3D view with on-the-fly embedding.
+        # Tabbed with Structure and Conformers on the right.
+        viewer_3d_dock = QDockWidget("3D Viewer", self)
+        viewer_3d_dock.setObjectName("viewer3dDock")
+        viewer_3d_dock.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
+        )
+        self._viewer_3d_panel = Viewer3DPanel(
+            dark=self._theme_manager.is_dark, parent=viewer_3d_dock
+        )
+        viewer_3d_dock.setWidget(self._viewer_3d_panel)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, viewer_3d_dock)
+        self.tabifyDockWidget(self._structure_dock, viewer_3d_dock)
+        self._structure_dock.raise_()  # Structure is the default-visible right tab
+        self._viewer_3d_dock = viewer_3d_dock
 
         # Chemical Space dock: a wide 2D scatter, so it lives along the bottom
         # spanning the window rather than in a narrow side column.
@@ -269,10 +323,24 @@ class MainWindow(QMainWindow):
         space_dock.hide()  # revealed when a projection is first run
         self._space_dock = space_dock
 
-        # Cross-panel wiring: table selection drives the structure viewer and the
-        # conformer panel; theme changes re-render every depiction/viewer.
+        # Reproducibility dock: the research feature. Tabbed with Chemical Space
+        # along the bottom — both are wide analytical panels, not per-molecule views.
+        repro_dock = QDockWidget("Reproducibility", self)
+        repro_dock.setObjectName("reproducibilityDock")
+        self._repro_panel = ReproducibilityPanel(
+            dark=self._theme_manager.is_dark, parent=repro_dock
+        )
+        repro_dock.setWidget(self._repro_panel)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, repro_dock)
+        self.tabifyDockWidget(space_dock, repro_dock)
+        repro_dock.hide()  # revealed when an audit is first run
+        self._repro_dock = repro_dock
+
+        # Cross-panel wiring: table selection drives the structure viewer,
+        # conformer panel and 3D viewer; theme changes re-render every depiction.
         self._table_panel.selection_changed.connect(self._structure_panel.set_record)
         self._table_panel.selection_changed.connect(self._conformer_panel.set_record)
+        self._table_panel.selection_changed.connect(self._viewer_3d_panel.set_record)
         self._table_panel.selection_changed.connect(self._on_selection_for_space)
         self._table_panel.similarity_requested.connect(self._on_similarity_requested)
         self._scaffold_panel.scaffold_selected.connect(self._on_scaffold_selected)
@@ -281,6 +349,9 @@ class MainWindow(QMainWindow):
         )
         # Plot → table: a click or lasso in the space selects those molecules.
         self._space_panel.points_selected.connect(self._table_panel.select_records)
+        self._property_filter_panel.filters_changed.connect(
+            self._table_panel.apply_property_range_filter
+        )
         self._theme_manager.theme_changed.connect(self._on_theme_changed)
 
     def _build_actions(self) -> None:
@@ -349,6 +420,13 @@ class MainWindow(QMainWindow):
         )
         self.action_chemical_space.triggered.connect(self._on_chemical_space)
 
+        self.action_reproducibility = QAction(get_icon("scaffold"), "&Reproducibility Audit…", self)
+        self.action_reproducibility.setShortcut("Ctrl+Shift+R")
+        self.action_reproducibility.setStatusTip(
+            "Research: compare standardization protocols and attribute divergence causes"
+        )
+        self.action_reproducibility.triggered.connect(self._on_reproducibility_audit)
+
         self.action_cluster = QAction(get_icon("cluster"), "&Cluster Molecules…", self)
         self.action_cluster.setShortcut("Ctrl+Shift+K")
         self.action_cluster.setStatusTip(
@@ -370,15 +448,37 @@ class MainWindow(QMainWindow):
         )
         self.action_batch.triggered.connect(self._on_batch)
 
+        self.action_convert = QAction(get_icon("open"), "Con&vert Format…", self)
+        self.action_convert.setShortcut("Ctrl+Shift+V")
+        self.action_convert.setStatusTip(
+            "Convert between molecule file formats (CSV, SDF, MOL, SMILES)"
+        )
+        self.action_convert.triggered.connect(self._on_convert)
+
         self.action_quit = QAction("E&xit", self)
         self.action_quit.setShortcut(QKeySequence.StandardKey.Quit)
         self.action_quit.setStatusTip("Exit the application")
         self.action_quit.triggered.connect(self.close)
 
-        self.action_toggle_theme = QAction(get_icon("theme"), "Toggle &Theme", self)
+        self.action_toggle_theme = QAction(get_icon("theme"), "&Next Theme", self)
         self.action_toggle_theme.setShortcut("Ctrl+T")
-        self.action_toggle_theme.setStatusTip("Switch between dark and light themes")
+        self.action_toggle_theme.setStatusTip("Cycle to the next look-and-feel theme")
         self.action_toggle_theme.triggered.connect(self._on_toggle_theme)
+
+        # Build checkable actions for the Look & Feel submenu.
+        self._look_feel_group = QActionGroup(self)
+        self._look_feel_group.setExclusive(True)
+        self._look_feel_actions: dict[str, QAction] = {}
+        for key in self._theme_manager.available():
+            display = self._theme_manager.display_name(key)
+            action = QAction(display, self)
+            action.setCheckable(True)
+            action.setData(key)
+            if key == self._theme_manager.current:
+                action.setChecked(True)
+            action.triggered.connect(self._on_look_feel_selected)
+            self._look_feel_group.addAction(action)
+            self._look_feel_actions[key] = action
 
         # QDockWidget provides ready-made checkable show/hide actions — no
         # custom handlers needed, and the checkmark stays in sync for free.
@@ -390,8 +490,19 @@ class MainWindow(QMainWindow):
         self.action_toggle_scaffolds.setText("Scaffolds &Panel")
         self.action_toggle_conformers = self._conformer_dock.toggleViewAction()
         self.action_toggle_conformers.setText("&Conformers Panel")
+        self.action_toggle_3d = self._viewer_3d_dock.toggleViewAction()
+        self.action_toggle_3d.setText("3D &Viewer Panel")
         self.action_toggle_space = self._space_dock.toggleViewAction()
         self.action_toggle_space.setText("Chemical S&pace Panel")
+        self.action_toggle_repro = self._repro_dock.toggleViewAction()
+        self.action_toggle_repro.setText("Re&producibility Panel")
+        self.action_toggle_filters = self._filters_dock.toggleViewAction()
+        self.action_toggle_filters.setText("Property &Filters Panel")
+
+        self.action_manual = QAction("&User Manual", self)
+        self.action_manual.setShortcut(QKeySequence.StandardKey.HelpContents)  # F1
+        self.action_manual.setStatusTip("Open the illustrated user manual")
+        self.action_manual.triggered.connect(self._on_manual)
 
         self.action_about = QAction("&About", self)
         self.action_about.setStatusTip("About this application")
@@ -403,6 +514,7 @@ class MainWindow(QMainWindow):
 
         file_menu = menubar.addMenu("&File")
         file_menu.addAction(self.action_open)
+        file_menu.addAction(self.action_convert)
         file_menu.addAction(self.action_report)
         file_menu.addSeparator()
         file_menu.addAction(self.action_settings)
@@ -422,16 +534,35 @@ class MainWindow(QMainWindow):
         chemistry_menu.addSeparator()
         chemistry_menu.addAction(self.action_batch)
 
+        research_menu = menubar.addMenu("&Research")
+        research_menu.addAction(self.action_reproducibility)
+
+        # Plugins menu: created empty here, populated by _load_plugins() once
+        # third-party plugins are discovered — a plugin with nothing to add
+        # still gets an (empty, harmless) menu rather than none at all.
+        self._plugins_menu = menubar.addMenu("Plu&gins")
+
         view_menu = menubar.addMenu("&View")
         view_menu.addAction(self.action_toggle_theme)
         view_menu.addSeparator()
         view_menu.addAction(self.action_toggle_workspace)
         view_menu.addAction(self.action_toggle_structure)
         view_menu.addAction(self.action_toggle_scaffolds)
+        view_menu.addAction(self.action_toggle_filters)
         view_menu.addAction(self.action_toggle_conformers)
+        view_menu.addAction(self.action_toggle_3d)
         view_menu.addAction(self.action_toggle_space)
+        view_menu.addAction(self.action_toggle_repro)
 
         help_menu = menubar.addMenu("&Help")
+        help_menu.addAction(self.action_manual)
+        help_menu.addSeparator()
+        # Look & Feel submenu under Help, matching DataWarrior layout.
+        look_feel_menu = QMenu("Look \u0026 Feel", self)
+        for action in self._look_feel_group.actions():
+            look_feel_menu.addAction(action)
+        help_menu.addMenu(look_feel_menu)
+        help_menu.addSeparator()
         help_menu.addAction(self.action_about)
 
     def _build_toolbar(self) -> None:
@@ -520,6 +651,7 @@ class MainWindow(QMainWindow):
             or self._substruct_worker is not None
             or self._batch_worker is not None
             or self._report_worker is not None
+            or self._repro_worker is not None
         ):
             return
         if not self._pending_paths:
@@ -545,6 +677,7 @@ class MainWindow(QMainWindow):
         if not self._pending_paths:
             self._progress.setVisible(False)
             self.action_open.setEnabled(True)
+            self._start_background_alerts()  # whole queue drained: audit now
         self._start_next_load()
 
     # ------------------------------------------------------------ run helpers
@@ -568,6 +701,7 @@ class MainWindow(QMainWindow):
             self.action_substructure,
             self.action_batch,
             self.action_report,
+            self.action_reproducibility,
         ):
             action.setEnabled(not busy)
 
@@ -599,6 +733,7 @@ class MainWindow(QMainWindow):
         self._table_panel.append_records(report.records)
         if self._table_panel.row_count:
             self._stack.setCurrentWidget(self._table_panel)
+            self._property_filter_panel.update_ranges(list(self._table_panel.model.records))
 
         self._sources_list.addItem(
             f"{report.source.name}  —  {report.n_loaded} molecule(s)"
@@ -664,9 +799,14 @@ class MainWindow(QMainWindow):
         """
         self._structure_panel.set_record(None)
         self._conformer_panel.set_record(None)
+        self._viewer_3d_panel.set_record(None)
+        self._property_filter_panel.clear()
         self._space_panel.clear()
+        self._repro_panel.clear()  # the audit referenced the old record objects
         self._table_panel.apply_substructure_filter(False)
         self._reset_scaffold_view()
+        # New record objects always start with alerts uncomputed; audit them.
+        self._start_background_alerts()
 
     def _on_standardize_finished(self, report: StandardizationReport) -> None:
         """Adopt the standardized dataset and present the change report."""
@@ -696,6 +836,55 @@ class MainWindow(QMainWindow):
         self._progress.setVisible(False)
         self._set_actions_busy(False)
         self._start_next_load()
+
+    # ------------------------------------------------------------------ alerts
+    def _start_background_alerts(self) -> None:
+        """Automatically audit the current dataset for structural alerts.
+
+        Checking a molecule against several hundred PAINS/Brenk/NIH SMARTS
+        patterns is too slow to run synchronously during a table repaint
+        (which is how this used to be triggered — see
+        ``services/chemistry/alerts.py`` for the full story), but light
+        enough overall that it should not block every other action the way
+        standardize/descriptors/etc. do. So this runs on a background worker
+        deliberately outside :meth:`_set_actions_busy`'s guard, and is a
+        silent, automatic pass — no progress bar, no dialog — matching the
+        "WaweKit automatically audits loaded structures" promise in the
+        manual (Help → User Manual).
+        """
+        if self._alerts_worker is not None or self._table_panel.row_count == 0:
+            return  # already running; the next trigger will catch what's left
+        records = list(self._table_panel.model.records)
+        worker = FunctionWorker(compute_alerts_for_records, records)
+        worker.signals.finished.connect(self._on_alerts_finished)
+        worker.signals.error.connect(self._on_alerts_error)
+        self._alerts_worker = worker
+        QThreadPool.globalInstance().start(worker)
+        logger.info("Started background structural-alerts audit for %d record(s)", len(records))
+
+    def _on_alerts_finished(self, report: AlertReport) -> None:
+        """Repaint the Alerts column now that the cache is filled in."""
+        self._alerts_worker = None
+        self._table_panel.refresh_alerts()
+        logger.info(
+            "Alerts audit complete: %d checked (%d with warnings), %d reused",
+            report.computed,
+            report.with_alerts,
+            report.reused,
+        )
+        # Re-trigger ONLY if the dataset changed while this pass was running
+        # (records appended, or the whole set replaced) — checked by count and
+        # by scanning for any still-uncomputed record. Without this condition,
+        # every pass would immediately reschedule itself forever; with it, the
+        # chain runs at most once more per actual change and then stops.
+        current = self._table_panel.model.records
+        if len(current) != len(report.records) or any(not r.alerts_computed for r in current):
+            self._start_background_alerts()
+
+    def _on_alerts_error(self, message: str) -> None:
+        """Log a failed audit — silent to the user, since the trigger itself was."""
+        self._alerts_worker = None
+        logger.warning("Background structural-alerts audit failed: %s", message)
 
     def _show_standardize_summary(self, report: StandardizationReport) -> None:
         """Show counts up front, full per-molecule provenance behind Details."""
@@ -739,6 +928,7 @@ class MainWindow(QMainWindow):
         # Values were cached on the same record objects the table already holds,
         # so we refresh the affected columns rather than swapping the dataset.
         self._table_panel.refresh_descriptors()
+        self._property_filter_panel.update_ranges(list(self._table_panel.model.records))
         self.statusBar().showMessage(
             f"Descriptors: {report.computed} computed, {report.reused} reused, "
             f"{report.n_failed} failure(s)",
@@ -1338,6 +1528,7 @@ class MainWindow(QMainWindow):
         # the whole dataset and clear everything that pointed at the old one.
         self._table_panel.set_records(result.records)
         self._reset_derived_views()
+        self._property_filter_panel.update_ranges(list(self._table_panel.model.records))
 
         verb = "cancelled" if result.cancelled else "complete"
         export_note = (
@@ -1436,6 +1627,64 @@ class MainWindow(QMainWindow):
         self._set_actions_busy(False)
         self._start_next_load()
 
+    # ------------------------------------------------------- research: repro audit
+    def _on_reproducibility_audit(self) -> None:
+        """Configure and launch a standardization-reproducibility audit.
+
+        Research feature: compares standardization protocols across the whole
+        dataset and (optionally) attributes each disagreement to a specific
+        operation via ablation. See services/reproducibility for the methodology.
+        """
+        if self._table_panel.row_count == 0:
+            self.statusBar().showMessage("Load molecules before running an audit", 4000)
+            return
+        options = ReproducibilityDialog.get_options(self)
+        if options is None:
+            return  # cancelled
+        protocols, attribute_causes = options
+
+        records = [(r.name, r.mol) for r in self._table_panel.model.records]
+        self._begin_run(
+            len(records),
+            f"Auditing {len(records)} molecule(s) across {len(protocols)} protocol(s)…",
+        )
+
+        worker = FunctionWorker(
+            analyze_divergence, records, protocols, attribute_causes, inject_progress=True
+        )
+        worker.signals.progress.connect(self._on_load_progress)
+        worker.signals.finished.connect(self._on_reproducibility_finished)
+        worker.signals.error.connect(self._on_reproducibility_error)
+        self._repro_worker = worker
+        QThreadPool.globalInstance().start(worker)
+        logger.info("Started reproducibility audit over %d record(s)", len(records))
+
+    def _on_reproducibility_finished(self, run: DivergenceRun) -> None:
+        """Compute metrics from the completed run and show the panel."""
+        metrics = compute_metrics(run)
+        self._repro_panel.set_results(run, metrics)
+        self._repro_dock.show()
+        self._repro_dock.raise_()
+        self.statusBar().showMessage(
+            f"Audit complete: {metrics.n_labile}/{metrics.n_molecules} molecule(s) labile "
+            f"(SMILES-reproducibility {metrics.smiles_reproducibility:.0%}, "
+            f"InChIKey-reproducibility {metrics.inchikey_reproducibility:.0%})",
+            12000,
+        )
+        self._finish_reproducibility()
+
+    def _on_reproducibility_error(self, message: str) -> None:
+        """Report a whole-run failure."""
+        QMessageBox.warning(self, "Reproducibility audit failed", message)
+        self._finish_reproducibility()
+
+    def _finish_reproducibility(self) -> None:
+        """Reset UI state after an audit and resume any queued loads."""
+        self._repro_worker = None
+        self._progress.setVisible(False)
+        self._set_actions_busy(False)
+        self._start_next_load()
+
     # ---------------------------------------------------------------- settings
     def _on_settings(self) -> None:
         """Open the Settings dialog and apply + persist any changes."""
@@ -1474,6 +1723,43 @@ class MainWindow(QMainWindow):
         if state is not None:
             self.restoreState(state)
 
+    # --------------------------------------------------------------- plugins
+    def _load_plugins(self) -> None:
+        """Discover and activate installed plugins (Module 16).
+
+        Plugins are third-party, untrusted code: a plugin that fails to import
+        or raises during activation is logged and skipped, never allowed to
+        prevent the application from starting — the same resilience discipline
+        every chemistry service in this app applies to a bad molecule, applied
+        here to a bad plugin.
+        """
+        context = PluginContext(
+            add_menu_action=self._add_plugin_menu_action, add_dock=self._add_plugin_dock
+        )
+        report = load_plugins(context)
+        if report.loaded:
+            names = ", ".join(p.name for p in report.loaded)
+            logger.info("Loaded %d plugin(s): %s", len(report.loaded), names)
+        for failure in report.failures:
+            logger.warning("Plugin %r failed to load: %s", failure.entry_point_name, failure.error)
+
+    def _add_plugin_menu_action(self, label: str, callback) -> None:  # noqa: ANN001
+        """Add ``label`` to the Plugins menu, calling ``callback`` when triggered.
+
+        The callback signature is deliberately unconstrained (a plugin author
+        should not need to import PySide6 to write one) — Qt's ``triggered``
+        signal is happy to call any zero-argument callable.
+        """
+        action = QAction(label, self)
+        action.triggered.connect(callback)
+        self._plugins_menu.addAction(action)
+
+    def _add_plugin_dock(self, title: str, widget) -> None:  # noqa: ANN001 — QWidget
+        """Add ``widget`` as a new dock panel titled ``title``."""
+        dock = QDockWidget(title, self)
+        dock.setWidget(widget)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
+
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 — Qt override
         """Persist theme and window layout before the window closes."""
         # The runtime theme toggle is transient until now; capture it here so it
@@ -1494,18 +1780,47 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
     def _on_toggle_theme(self) -> None:
-        """Switch themes and report the result in the status bar."""
+        """Cycle to the next theme and report the result in the status bar."""
         new_theme = self._theme_manager.toggle()
-        self.statusBar().showMessage(f"Theme: {new_theme}", 3000)
+        display = self._theme_manager.display_name(new_theme)
+        self.statusBar().showMessage(f"Theme: {display}", 3000)
+
+    def _on_look_feel_selected(self) -> None:
+        """Apply the theme chosen from the Look & Feel submenu."""
+        action = self._look_feel_group.checkedAction()
+        if action is not None:
+            key = action.data()
+            if key != self._theme_manager.current:
+                self._theme_manager.apply(key)
+                display = self._theme_manager.display_name(key)
+                self.statusBar().showMessage(f"Theme: {display}", 3000)
 
     def _on_theme_changed(self, theme: str) -> None:
         """Re-render all molecule depictions with the palette matching ``theme``."""
-        dark = theme == "dark"
+        dark = self._theme_manager.is_dark
         self._table_panel.set_dark(dark)
         self._structure_panel.set_dark(dark)
         self._scaffold_panel.set_dark(dark)
         self._conformer_panel.set_dark(dark)
+        self._viewer_3d_panel.set_dark(dark)
         self._space_panel.set_dark(dark)
+        self._repro_panel.set_dark(dark)
+        # Keep the Look & Feel checkmarks in sync.
+        action = self._look_feel_actions.get(theme)
+        if action is not None:
+            action.setChecked(True)
+
+    def _on_convert(self) -> None:
+        """Open the file-format converter dialog."""
+        ConverterDialog.run_converter(self)
+
+    def _on_manual(self) -> None:
+        """Show the user manual (non-modal, so the app stays usable alongside)."""
+        if self._manual_dialog is None:
+            self._manual_dialog = ManualDialog(self)
+        self._manual_dialog.show()
+        self._manual_dialog.raise_()
+        self._manual_dialog.activateWindow()
 
     def _on_about(self) -> None:
         """Display the About dialog with developer and organization info."""
@@ -1513,9 +1828,7 @@ class MainWindow(QMainWindow):
         dev_lines: list[str] = []
         for dev in constants.DEVELOPERS:
             emails = dev.get("emails", [])
-            email_links = ", ".join(
-                f'<a href="mailto:{e}">{e}</a>' for e in emails
-            )
+            email_links = ", ".join(f'<a href="mailto:{e}">{e}</a>' for e in emails)
             dev_lines.append(f"<b>{dev['name']}</b><br/>{email_links}")
         developers_html = "<br/><br/>".join(dev_lines)
 

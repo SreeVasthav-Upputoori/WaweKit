@@ -7,6 +7,147 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Branding.** The WaweKit logo (`WaweKit.png`) is now the application
+  identity: window/taskbar icon (badge crop), a multi-resolution
+  `resources/icons/wawekit.ico` baked into the PyInstaller build, and a
+  **splash screen** showing the logo for ~2.5 s at startup before the main
+  window appears.
+- **Help → User Manual (F1).** A complete illustrated in-app manual
+  (`resources/manual/`): quick start, every feature explained in plain
+  language (what it does / when to use it / numbered steps / tips), 15
+  screenshots, a full shortcut table, and troubleshooting. Ships inside the
+  package and the frozen bundle; rendered in a non-modal QTextBrowser so
+  users can follow along in the app. 6 new tests, including one that fails
+  if the manual ever references a missing image or drops a feature section.
+
+### Fixed
+- **Gap analysis (4 correctness bugs, all in the research-track display
+  path):**
+  - `ReproducibilityMetrics.n_labile` was derived as
+    `round(n · (1 − min(score)))` — the *larger* of the two per-identity
+    labile counts, not the union that `is_labile` actually means, so the
+    "N labile" shown in the panel, status bar, and benchmark could
+    under-report. It is now the exact count carried from the run.
+  - A protocol **failure** was counted as divergence: one failed protocol
+    made a molecule "labile" with no real disagreement, and a molecule
+    *every* protocol failed on compared as perfectly reproducible. Agreement
+    is now judged only across protocols that produced a value; failures are
+    tracked separately (`n_failed`/`all_failed`/`n_with_failures`) and
+    surfaced in the panel headline, benchmark summary, and CSV
+    (`n_failed_protocols` column).
+  - Pairwise protocol agreement counted two failures (`"" == ""`) as a
+    match, inflating the heatmap; only molecule pairs where both forms are
+    valid now count, with the denominator adjusted accordingly.
+  - The Reproducibility panel's placeholder pointed to the wrong menu
+    ("Chemistry → …" — the action lives in **Research**).
+  - 4 regression tests pin all of the above.
+- **Manual accuracy pass.** The illustrated manual had drifted from the app
+  it documents: `Ctrl+T` was described as a dark/light toggle in three places
+  even though it now cycles through 8 Look & Feel themes; the "main window"
+  tour was missing the Property Filters and standalone 3D Viewer tabs added
+  since the manual was first written; and there was no mention of the View
+  menu (the only place to restore an accidentally-closed panel). All fixed
+  and cross-checked against the current menu-building code, not guessed.
+- **Structural alerts no longer stutter the table.** PAINS/Brenk/NIH
+  checking (`services/chemistry/alerts.py`) was triggered from the table's
+  `data()` method — meaning the *first paint* of every row ran several
+  hundred SMARTS-pattern matches synchronously on the GUI thread. Added
+  `compute_alerts_for_records` (mirrors `compute_descriptors`'s batch/cache/
+  progress shape exactly) and run it as an automatic background pass after
+  every load, standardize, and batch — self-chaining so records added while
+  a pass is already running still get picked up, with a termination
+  condition so it cannot loop forever once nothing is left to check.
+  `MoleculeRecord` gained `alerts_computed` (a non-triggering cache check)
+  and `invalidate_alerts()`; the table now shows a blank/pending cell instead
+  of blocking until the background pass fills it in. 15 new tests; verified
+  end-to-end with a real background QApplication run (cells start pending,
+  fill in without blocking, worker slot clears on completion).
+- **Test-suite visibility regression from the earlier segfault workaround.**
+  The `os._exit()` fix for the QtWebEngine shutdown crash (see the 0.1.0
+  entry) was hooked to `pytest_sessionfinish`, but the terminal reporter
+  prints its "FAILURES" / "N passed" summary from a *hookwrapper* around that
+  same hook — hookwrapper post-yield code runs only after every plain
+  hookimpl returns, so the exit fired before the summary ever printed. Any
+  run with a failure showed no detail at all, just exit code 1. Moved the
+  exit to `pytest_unconfigure`, which fires strictly after
+  `pytest_sessionfinish` (and everything it wraps) completes — full failure
+  output is back, exit code is still correct (verified 3 consecutive full
+  runs, exit 0 every time; explicit failure-detail check also verified with
+  a temporarily broken test).
+
+## [0.1.0] - 2026-07-18
+
+First public release: all 20 roadmap modules plus the 6-stage
+standardization-reproducibility research track.
+
+### Added
+- **Module 20 — Release preparation.** `RELEASE_NOTES.md`; README status
+  line updated (it still described Modules 1–8 only); this CHANGELOG
+  converted from a single running `[Unreleased]` block into a dated `0.1.0`
+  entry per Keep a Changelog convention.
+- **Module 19 — Testing (CI).**
+  - `.github/workflows/ci.yml`: runs on Ubuntu/Windows/macOS for every push
+    and PR — `ruff check`, `black --check`, then the full `pytest` suite.
+    Qt runs headless via the existing `QT_QPA_PLATFORM=offscreen` default in
+    `tests/conftest.py`; Linux additionally installs the system Qt libraries
+    PySide6 needs even to import without a display.
+  - Fixed a real bug this surfaced: the test process was **segfaulting
+    during interpreter shutdown** after all 300+ tests already passed (a
+    known QtWebEngine/Chromium teardown crash — the 3D conformer viewer,
+    Module 9). `pytest`'s exit code would have been non-zero, failing CI
+    on every green run. Fixed with a `trylast` `pytest_sessionfinish` hook
+    in `conftest.py` that flushes output and calls `os._exit(exitstatus)`
+    once pytest has already recorded the real result, skipping the crashing
+    native teardown entirely. Verified across 4 consecutive full-suite runs
+    (exit code 0 every time; previously 139/access-violation).
+- **Module 18 — Documentation.**
+  - `mkdocs.yml`: a minimal MkDocs site over the existing `docs/` (Home,
+    Features, Packaging), built and verified with `mkdocs build --strict`
+    (zero warnings after fixing one broken anchor link in `FEATURES.md`).
+- **Module 17 — Packaging.**
+  - `wawekit.spec`: a hand-written PyInstaller spec (not the naive one-liner) —
+    explicitly bundles the three things static import analysis misses: SVG
+    icons + QSS themes + vendored 3Dmol.js (read via `importlib.resources`,
+    never `import`-ed), RDKit's own data files, and hidden submodules for
+    RDKit/scikit-learn/matplotlib's Qt backend. `UPX` disabled deliberately
+    (a frequent source of AV false-positives and Qt/RDKit startup crashes).
+    Build with `pyinstaller wawekit.spec`; `pyinstaller` added to the `dev`
+    extra.
+- **Module 16 — Plugin system.**
+  - `plugins/base.py`: `WawekitPlugin`, a `runtime_checkable` `Protocol`
+    (`name`, `version`, `activate(context)`) — a plugin author depends on
+    matching a shape, not on importing the app. `PluginContext` exposes only
+    `add_menu_action`/`add_dock`, a deliberately narrow extension surface.
+  - `plugins/manager.py`: discovery via Python entry points (group
+    `wawekit.plugins`, the same mechanism `pip` itself uses for console
+    scripts) — no new dependency. `load_plugins` applies the same resilience
+    rule as every chemistry service in this app: one bad plugin (bad import,
+    bad constructor, exception in `activate()`) is logged and skipped, never
+    crashes the app.
+  - `MainWindow._load_plugins()`: a **Plugins** menu, empty at startup,
+    populated by whatever plugins are discovered.
+  - Verified end-to-end with a real installed third-party-style package
+    (`examples/example-plugin/`, `pip install -e`), not just mocks — genuine
+    `importlib.metadata` discovery produced a working "Say Hello" menu item.
+    6 new tests.
+- **Research flagship R2–R6 — Divergence analysis, metrics, GUI, benchmark, manuscript.**
+  - `services/reproducibility/divergence.py`: `analyze_molecule`/`analyze_divergence`
+    — per-molecule agreement on both identity conventions plus **ablation-based
+    cause attribution** (toggle each operation off; the first that changes the
+    outcome is the implicated cause).
+  - `services/reproducibility/metrics.py`: `compute_metrics` — reproducibility
+    score, pairwise protocol-agreement matrix, and divergence cause spectrum.
+  - `gui/widgets/reproducibility_panel.py` + `gui/dialogs/reproducibility_dialog.py`:
+    a new **Research** menu → Reproducibility Audit — protocol-agreement heatmap,
+    cause-spectrum chart (Matplotlib, exportable), and a labile-molecule list.
+  - `services/reproducibility/benchmark.py`: a Qt-free CLI benchmark harness
+    (`python -m wawekit.services.reproducibility.benchmark`), run for real on a
+    40-molecule illustrative set: 70.0% SMILES-reproducible, 75.0%
+    InChIKey-reproducible; dominant causes charge (41.7%) and salt/fragment
+    handling (33.3%). Results captured in `learning/research-track-R5-benchmark/`.
+  - A full manuscript draft (Abstract → Conclusion) populated with the real
+    benchmark numbers at `learning/research-track-R6-manuscript/manuscript_draft.md`.
+  - 23 new tests (divergence 9, metrics 7, benchmark 7).
 - **Research flagship R1 — Standardization protocol engine.**
   - `services/reproducibility/protocol.py`: `StandardOp` (8 toggleable operations),
     `StandardizationProtocol` (a named operation set applied in a fixed order,

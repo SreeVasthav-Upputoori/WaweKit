@@ -12,13 +12,15 @@ discovery — for academic researchers, computational chemists, pharmaceutical
 scientists, and students learning the field. It aims to be one of the best free
 RDKit desktop applications available.
 
-> **Status:** early development. Modules 1–8 complete: the app loads SDF, MOL
-> and SMILES files into a sortable, structure-thumbnail table with a Structure
-> panel (SVG/PNG export); standardizes datasets (salts, charges, tautomers,
-> dedup); computes descriptors (with a quick-filter box), fingerprints
-> (Morgan/MACCS/RDKit) and Tanimoto similarity rankings; and analyzes
-> Bemis–Murcko scaffolds with a diversity panel and click-to-filter grouping —
-> all on background threads with progress and full reports.
+> **Status:** all 20 roadmap modules complete (loading through release prep),
+> plus a full 6-stage research track (see below). Load SDF/MOL/SMILES files
+> into a sortable, structure-thumbnail table; standardize, compute descriptors
+> and fingerprints, search by similarity or substructure, analyze scaffolds,
+> generate conformers with an interactive 3D viewer, visualize chemical space,
+> cluster, batch-process pipelines, and generate shareable HTML/PDF reports —
+> all on background threads with progress and full reports. Extensible via a
+> plugin system, packaged with PyInstaller, documented with MkDocs, and tested
+> in CI on Ubuntu/Windows/macOS.
 
 ## Features (roadmap)
 
@@ -39,11 +41,11 @@ Modules are built one at a time to production quality:
 13. ✅ Batch processing (chained pipeline, CSV/SDF export, cancellable)
 14. ✅ Report generation (shareable HTML + PDF, molecule grid, summary stats)
 15. ✅ Settings (persist theme, log level, window/dock layout)
-16. ⬜ Plugin system
-17. ⬜ Packaging
-18. ⬜ Documentation
-19. ⬜ Testing
-20. ⬜ Release preparation
+16. ✅ Plugin system (entry-point discovery, menu/dock extension points)
+17. ✅ Packaging (PyInstaller spec — frozen desktop bundle)
+18. ✅ Documentation (MkDocs site over `docs/`)
+19. ✅ Testing (CI workflow — lint, format, full suite on 3 OSes)
+20. ✅ Release preparation ([RELEASE_NOTES.md](RELEASE_NOTES.md))
 
 ## Research flagship
 
@@ -59,6 +61,18 @@ Early result already surfaced by the protocol engine: **the choice of identity
 key changes what "reproducible" means** — InChIKey masks tautomer divergence that
 canonical SMILES reveals, so the two disagree on which molecules are
 pipeline-dependent. See [`learning/research-track-R1-protocol-engine/`](learning/research-track-R1-protocol-engine/).
+
+**Status: all 6 research stages implemented (R1–R6).** Divergence analysis with
+ablation-based cause attribution, dataset-level reproducibility metrics, an
+interactive GUI panel (Research menu → Reproducibility Audit), a CLI benchmark
+harness, and a manuscript draft populated with real results. On a 40-molecule
+illustrative benchmark: **70.0% SMILES-reproducible, 75.0% InChIKey-reproducible**
+across three protocols, with charge handling (41.7%) and salt/fragment handling
+(33.3%) the dominant divergence causes. See
+[`learning/research-track-R2-to-R6-summary/`](learning/research-track-R2-to-R6-summary/),
+the raw results in
+[`learning/research-track-R5-benchmark/`](learning/research-track-R5-benchmark/),
+and the [manuscript draft](learning/research-track-R6-manuscript/manuscript_draft.md).
 
 ## Architecture
 

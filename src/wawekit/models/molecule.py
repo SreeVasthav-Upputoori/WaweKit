@@ -120,6 +120,7 @@ class MoleculeRecord:
     # Lazily-computed caches (excluded from __init__ and repr).
     _smiles: str | None = field(default=None, init=False, repr=False)
     _formula: str | None = field(default=None, init=False, repr=False)
+    _alerts: list[str] | None = field(default=None, init=False, repr=False)
 
     @property
     def smiles(self) -> str:
@@ -134,6 +135,38 @@ class MoleculeRecord:
         if self._formula is None:
             self._formula = rdMolDescriptors.CalcMolFormula(self.mol)
         return self._formula
+
+    @property
+    def alerts(self) -> list[str]:
+        """Compute structural alerts (PAINS, Brenk, NIH) lazily and cache them.
+
+        Checking a molecule against several hundred SMARTS patterns is not
+        free — unlike :attr:`smiles`/:attr:`formula`, this is too slow to
+        trigger from a GUI repaint. The GUI never calls this directly for an
+        uncomputed record; it checks :attr:`alerts_computed` first and relies
+        on a background pass (:func:`~wawekit.services.chemistry.alerts.compute_alerts_for_records`)
+        to fill the cache. Direct callers (tests, a CLI, a notebook) can still
+        use this property as a simple compute-and-cache call.
+        """
+        if self._alerts is None:
+            from wawekit.services.chemistry.alerts import compute_alerts
+
+            self._alerts = compute_alerts(self.mol)
+        return self._alerts
+
+    @property
+    def alerts_computed(self) -> bool:
+        """Whether :attr:`alerts` has already been computed and cached.
+
+        Lets a caller (the molecule table) check the cache without
+        triggering the computation — the check :attr:`alerts` itself cannot
+        offer, since reading it *is* the trigger.
+        """
+        return self._alerts is not None
+
+    def invalidate_alerts(self) -> None:
+        """Clear the cached alerts, so the next :attr:`alerts` access recomputes."""
+        self._alerts = None
 
     @property
     def num_heavy_atoms(self) -> int:

@@ -96,3 +96,46 @@ def export_sdf(records: list[MoleculeRecord], path: Path) -> int:
         writer.close()
     logger.info("Exported %d record(s) to %s", len(records), path)
     return len(records)
+
+
+def export_mol(record: MoleculeRecord, path: Path) -> None:
+    """Write a single molecule to a ``.mol`` file.
+
+    Parameters
+    ----------
+    record:
+        The molecule to export.
+    path:
+        Target file path (will be overwritten if it exists).
+
+    """
+    mol = Chem.Mol(record.mol)  # copy: never mutate the shared record
+    mol.SetProp("_Name", record.name)
+    for key, value in record.properties.items():
+        mol.SetProp(str(key), str(value))
+    Chem.MolToMolFile(mol, str(path))
+    logger.info("Exported 1 molecule to %s", path)
+
+
+def export_smiles(records: list[MoleculeRecord], path: Path) -> int:
+    """Write ``records`` as a SMILES file: one molecule per line with its name.
+
+    Parameters
+    ----------
+    records:
+        The molecules to export.
+    path:
+        Target file path (will be overwritten if it exists).
+
+    Returns
+    -------
+    int
+        The number of lines written.
+
+    """
+    lines: list[str] = []
+    for record in records:
+        lines.append(f"{record.smiles}\t{record.name}")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    logger.info("Exported %d record(s) to %s", len(records), path)
+    return len(records)

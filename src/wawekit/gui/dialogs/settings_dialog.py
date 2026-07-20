@@ -29,7 +29,19 @@ _LOG_LEVELS = ("ERROR", "WARNING", "INFO", "DEBUG")
 
 #: Selectable themes (kept in step with ThemeManager, but the dialog does not
 #: import it — it only edits the string the window later applies).
-_THEMES = ("dark", "light")
+_THEMES = ("dark", "graphite", "gray", "moderate", "light", "creme_coffee", "sahara", "nebula")
+
+#: Human-readable labels for each theme key, in the same order.
+_THEME_LABELS = {
+    "dark": "Night",
+    "graphite": "Graphite",
+    "gray": "Gray",
+    "moderate": "Moderate",
+    "light": "Light",
+    "creme_coffee": "Creme Coffee",
+    "sahara": "Sahara",
+    "nebula": "Nebula",
+}
 
 
 class SettingsDialog(QDialog):
@@ -49,7 +61,7 @@ class SettingsDialog(QDialog):
 
         self._theme = QComboBox(self)
         for theme in _THEMES:
-            self._theme.addItem(theme.capitalize(), theme)
+            self._theme.addItem(_THEME_LABELS.get(theme, theme.capitalize()), theme)
         self._theme.setCurrentIndex(max(0, self._theme.findData(config.theme)))
 
         self._log_level = QComboBox(self)

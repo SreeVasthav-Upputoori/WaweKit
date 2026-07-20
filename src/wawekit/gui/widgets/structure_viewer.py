@@ -67,6 +67,10 @@ class StructureViewerPanel(QWidget):
         self._name_label.setStyleSheet("font-weight: bold; font-size: 12pt;")
         self._name_label.setWordWrap(True)
         self._formula_label = QLabel("", self)
+        self._alerts_label = QLabel("", self)
+        self._alerts_label.setStyleSheet("color: #d9534f; font-weight: bold;")
+        self._alerts_label.setWordWrap(True)
+        self._alerts_label.setVisible(False)
         self._smiles_label = QLabel("", self)
         self._smiles_label.setWordWrap(True)
         self._smiles_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -102,6 +106,7 @@ class StructureViewerPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.addWidget(self._name_label)
         layout.addWidget(self._formula_label)
+        layout.addWidget(self._alerts_label)
         layout.addWidget(self._depiction_stack, stretch=3)
         layout.addWidget(self._smiles_label)
         layout.addLayout(buttons)
@@ -141,6 +146,8 @@ class StructureViewerPanel(QWidget):
         if record is None:
             self._name_label.clear()
             self._formula_label.clear()
+            self._alerts_label.clear()
+            self._alerts_label.setVisible(False)
             self._smiles_label.clear()
             self._props.setRowCount(0)
             self._depiction_stack.setCurrentWidget(self._placeholder)
@@ -149,6 +156,13 @@ class StructureViewerPanel(QWidget):
         self._name_label.setText(record.name)
         self._formula_label.setText(f"{record.formula}   ·   {record.num_heavy_atoms} heavy atoms")
         self._smiles_label.setText(record.smiles)
+
+        if record.alerts:
+            self._alerts_label.setText("⚠️ Alerts: " + ", ".join(record.alerts))
+            self._alerts_label.setVisible(True)
+        else:
+            self._alerts_label.clear()
+            self._alerts_label.setVisible(False)
 
         hit = record.substructure_match
         highlight = sorted(hit.atoms) if hit is not None and hit.is_match else None

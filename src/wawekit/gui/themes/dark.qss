@@ -1,4 +1,5 @@
-/* Wawekit — Dark theme
+/* Wawekit — Night theme (dark.qss)
+   The deepest dark palette — ideal for low-light environments.
    Qt Style Sheet (QSS): CSS-like styling for Qt widgets.
    Selectors are widget class names; properties are a Qt-specific subset. */
 
@@ -24,6 +25,9 @@ QMenuBar::item:selected {
 QMenu {
     background-color: #26282c;
     border: 1px solid #35373b;
+}
+QMenu::item {
+    padding: 6px 36px 6px 20px;
 }
 QMenu::item:selected {
     background-color: #3a6ea5;

@@ -1,0 +1,174 @@
+"""Render the manuscript Markdown into a submission-style Word document.
+
+Journals want .docx, and hand-converting a manuscript is exactly how numbers
+drift. This converts `manuscript_v2.md` directly, so the Word file is a
+derivative of the verified Markdown rather than a separately maintained copy —
+re-run it after any edit.
+
+Covers the Markdown subset the manuscript actually uses: headings, paragraphs,
+bold/italic/code spans, bullet and numbered lists, tables, horizontal rules and
+block quotes. Figures are inserted at their referenced positions.
+
+Usage:  python make_docx.py
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+from docx import Document
+from docx.enum.section import WD_SECTION
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.shared import Inches, Pt, RGBColor
+
+HERE = Path(__file__).parent
+SOURCE = HERE / "manuscript_v2.md"
+FIG_DIR = HERE / "figures"
+OUTPUT = HERE / "WaweKit_standardization_reproducibility_manuscript.docx"
+
+#: Figures inserted after the paragraph whose text starts with these markers.
+FIGURE_ANCHORS = {
+    "**Figure 1.**": "fig1_agreement_matrix.png",
+    "**Figure 2.**": "fig2_cause_spectrum.png",
+    "**Figure 3.**": "fig3_reproducibility.png",
+}
+
+INLINE = re.compile(r"(\*\*.+?\*\*|\*[^*]+?\*|`[^`]+?`)")
+
+
+def add_runs(paragraph, text: str) -> None:
+    """Add text to a paragraph, honouring bold/italic/code inline spans."""
+    for part in INLINE.split(text):
+        if not part:
+            continue
+        if part.startswith("**") and part.endswith("**"):
+            paragraph.add_run(part[2:-2]).bold = True
+        elif part.startswith("*") and part.endswith("*"):
+            paragraph.add_run(part[1:-1]).italic = True
+        elif part.startswith("`") and part.endswith("`"):
+            run = paragraph.add_run(part[1:-1])
+            run.font.name = "Consolas"
+            run.font.size = Pt(9)
+            run.font.color.rgb = RGBColor(0x33, 0x33, 0x33)
+        else:
+            paragraph.add_run(part)
+
+
+def style_document(doc: Document) -> None:
+    """Manuscript-standard body text: 11pt serif, 1.5 spacing, numbered pages."""
+    normal = doc.styles["Normal"]
+    normal.font.name = "Times New Roman"
+    normal.font.size = Pt(11)
+    normal.paragraph_format.space_after = Pt(6)
+    normal.paragraph_format.line_spacing = 1.5
+
+    section = doc.sections[0]
+    section.left_margin = section.right_margin = Inches(1)
+    section.top_margin = section.bottom_margin = Inches(1)
+
+
+def add_table(doc: Document, rows: list[str]) -> None:
+    """Render a Markdown pipe-table as a Word table with a header row."""
+    parsed = [[c.strip() for c in r.strip().strip("|").split("|")] for r in rows]
+    # Drop the |---|---| separator row.
+    body = [r for r in parsed if not all(set(c) <= set("-: ") for c in r)]
+    if not body:
+        return
+    table = doc.add_table(rows=len(body), cols=len(body[0]))
+    table.style = "Light Grid Accent 1"
+    for i, row in enumerate(body):
+        for j, cell_text in enumerate(row):
+            if j >= len(table.columns):
+                continue
+            cell = table.cell(i, j)
+            cell.text = ""
+            para = cell.paragraphs[0]
+            add_runs(para, cell_text)
+            for run in para.runs:
+                run.font.size = Pt(9)
+                if i == 0:
+                    run.bold = True
+    doc.add_paragraph()
+
+
+def convert() -> Path:
+    lines = SOURCE.read_text(encoding="utf-8").splitlines()
+    doc = Document()
+    style_document(doc)
+
+    i = 0
+    pending_table: list[str] = []
+
+    def flush_table() -> None:
+        nonlocal pending_table
+        if pending_table:
+            add_table(doc, pending_table)
+            pending_table = []
+
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+
+        # Tables accumulate until a non-table line ends them.
+        if stripped.startswith("|"):
+            pending_table.append(stripped)
+            i += 1
+            continue
+        flush_table()
+
+        if not stripped:
+            i += 1
+            continue
+
+        if stripped.startswith("# "):
+            heading = doc.add_heading(stripped[2:], level=0)
+            heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        elif stripped.startswith("## "):
+            doc.add_heading(stripped[3:], level=1)
+        elif stripped.startswith("### "):
+            doc.add_heading(stripped[4:], level=2)
+        elif stripped == "---":
+            doc.add_paragraph()
+        elif stripped.startswith("> "):
+            para = doc.add_paragraph(style="Intense Quote")
+            add_runs(para, stripped[2:])
+        elif re.match(r"^[-*] ", stripped):
+            para = doc.add_paragraph(style="List Bullet")
+            add_runs(para, stripped[2:])
+        elif re.match(r"^\d+\. ", stripped):
+            para = doc.add_paragraph(style="List Number")
+            add_runs(para, re.sub(r"^\d+\.\s*", "", stripped))
+        else:
+            # Join wrapped lines into one paragraph (Markdown soft wraps).
+            buf = [stripped]
+            j = i + 1
+            while (
+                j < len(lines)
+                and lines[j].strip()
+                and not re.match(r"^(#{1,3} |[-*] |\d+\. |\||>|---)", lines[j].strip())
+            ):
+                buf.append(lines[j].strip())
+                j += 1
+            text = " ".join(buf)
+            para = doc.add_paragraph()
+            add_runs(para, text)
+
+            for anchor, image in FIGURE_ANCHORS.items():
+                if text.startswith(anchor):
+                    path = FIG_DIR / image
+                    if path.is_file():
+                        doc.add_picture(str(path), width=Inches(6.2))
+                        doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            i = j
+            continue
+        i += 1
+
+    flush_table()
+    doc.save(OUTPUT)
+    return OUTPUT
+
+
+if __name__ == "__main__":
+    out = convert()
+    print(f"Wrote {out}  ({out.stat().st_size / 1024:.0f} KB)")

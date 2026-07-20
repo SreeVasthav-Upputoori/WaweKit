@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import time
 from pathlib import Path
 
 from PySide6.QtWidgets import QApplication
@@ -37,9 +38,34 @@ logger = logging.getLogger(__name__)
 #: dataclass defaults still apply.
 _SHIPPED_DEFAULTS = Path(__file__).resolve().parents[2] / "config" / "default_settings.toml"
 
+#: How long the branding splash stays up in total (window build time included).
+_SPLASH_MS = 2500
+
+
+def _claim_windows_taskbar_identity() -> None:
+    """Make the Windows taskbar show *our* icon, not the Python interpreter's.
+
+    When the app runs via ``python.exe``, Windows groups its windows under the
+    host executable and shows python.exe's icon in the taskbar, ignoring the
+    window icon. Registering an explicit AppUserModelID tells Windows this
+    process is its own application, so the taskbar uses the window icon (the
+    WaweKit badge). A no-op on other platforms and harmless if it fails.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            f"{constants.ORG_NAME}.{constants.APP_NAME}"
+        )
+    except (OSError, AttributeError):  # pragma: no cover — very old Windows only
+        logger.debug("Could not set AppUserModelID", exc_info=True)
+
 
 def _create_application(argv: list[str]) -> QApplication:
     """Create the QApplication and set its identity for path scoping."""
+    _claim_windows_taskbar_identity()
     app = QApplication(argv)
     app.setApplicationName(constants.APP_NAME)
     app.setApplicationDisplayName(constants.APP_NAME)
@@ -74,15 +100,42 @@ def run(argv: list[str] | None = None) -> int:
 
     # Imported here (not at module top) so logging/config are ready first and so
     # importing wawekit.app never forces the GUI stack to load prematurely.
-    from wawekit.gui.icons import get_icon
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QSplashScreen
+
+    from wawekit.gui.icons import get_app_icon, get_brand_pixmap
     from wawekit.gui.main_window import MainWindow
     from wawekit.gui.themes.theme_manager import ThemeManager
 
-    app.setWindowIcon(get_icon("app"))
+    app.setWindowIcon(get_app_icon())
+
+    # Branding splash: show the WaweKit logo while the main window is built,
+    # holding it for a short beat so the brand registers before the app appears.
+    # If the asset is missing the app simply starts directly — never crash on
+    # branding.
+    splash: QSplashScreen | None = None
+    splash_shown_at = time.monotonic()
+    logo = get_brand_pixmap("wawekit_logo", width=420)
+    if not logo.isNull():
+        splash = QSplashScreen(logo)
+        splash.show()
+        app.processEvents()  # paint the splash before the (heavier) window build
 
     theme_manager = ThemeManager(app, initial_theme=config.theme)
     window = MainWindow(config=config, theme_manager=theme_manager)
-    window.show()
+
+    if splash is not None:
+
+        def _reveal() -> None:
+            splash.finish(window)
+            window.show()
+
+        # Hold the splash for what remains of the branding beat (window
+        # construction already consumed part of it), then reveal the app.
+        elapsed_ms = int((time.monotonic() - splash_shown_at) * 1000)
+        QTimer.singleShot(max(0, _SPLASH_MS - elapsed_ms), _reveal)
+    else:
+        window.show()
 
     exit_code = app.exec()
     logger.info("Application exited with code %s", exit_code)

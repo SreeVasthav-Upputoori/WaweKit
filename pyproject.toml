@@ -45,6 +45,8 @@ dev = [
     "black>=24.0",
     "ruff>=0.5",
     "mkdocs>=1.6",
+    # Module 17: freezes the app into a distributable desktop bundle.
+    "pyinstaller>=6.6",
 ]
 # Heavier scientific extras added in later modules (export/reporting).
 science = [
@@ -53,8 +55,10 @@ science = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/your-org/wawekit"
-Repository = "https://github.com/your-org/wawekit"
+Homepage = "https://github.com/SreeVasthav-Upputoori/WaweKit"
+Repository = "https://github.com/SreeVasthav-Upputoori/WaweKit"
+Documentation = "https://github.com/SreeVasthav-Upputoori/WaweKit/blob/main/docs/FEATURES.md"
+Changelog = "https://github.com/SreeVasthav-Upputoori/WaweKit/blob/main/CHANGELOG.md"
 
 # Console/GUI launcher: after `pip install`, users run `wawekit`.
 [project.scripts]

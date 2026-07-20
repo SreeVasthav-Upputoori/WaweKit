@@ -45,3 +45,40 @@ def get_icon(name: str) -> QIcon:
         painter.end()
         icon.addPixmap(QPixmap.fromImage(image))
     return icon
+
+
+@lru_cache(maxsize=8)
+def get_brand_pixmap(name: str, width: int = 0) -> QPixmap:
+    """Return a PNG brand asset (logo/badge) from ``resources/icons``.
+
+    Used for the splash screen and the manual header, where a raster logo is
+    wanted rather than a rasterized SVG glyph. A missing asset logs a warning
+    and returns a null pixmap — branding must never crash the application.
+
+    Parameters
+    ----------
+    name:
+        Base name of the PNG (e.g. ``wawekit_logo``).
+    width:
+        If non-zero, the pixmap is smoothly scaled to this width.
+
+    """
+    try:
+        data = resources.files("wawekit.resources").joinpath(f"icons/{name}.png").read_bytes()
+    except (OSError, ModuleNotFoundError):
+        logger.warning("Brand asset %r not found", name)
+        return QPixmap()
+    pixmap = QPixmap()
+    pixmap.loadFromData(QByteArray(data))
+    if width and not pixmap.isNull():
+        pixmap = pixmap.scaledToWidth(width, Qt.TransformationMode.SmoothTransformation)
+    return pixmap
+
+
+def get_app_icon() -> QIcon:
+    """Return the application window icon (the WaweKit badge).
+
+    Falls back to the legacy ``app.svg`` glyph if the badge PNG is missing.
+    """
+    pixmap = get_brand_pixmap("wawekit_badge")
+    return QIcon(pixmap) if not pixmap.isNull() else get_icon("app")

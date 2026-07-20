@@ -28,7 +28,7 @@ is the *how it was built*.
 13. [Batch Processing](#13-batch-processing)
 14. [Report Generation](#14-report-generation)
 15. [Settings](#15-settings)
-16. [Research Track — Standardization Reproducibility Auditor](#16-research-track--standardization-reproducibility-auditor)
+16. [Research Track — Standardization Reproducibility Auditor](#16-research-track-standardization-reproducibility-auditor)
 
 ---
 
@@ -597,8 +597,10 @@ prototype.
 **What it is:** A methods-research initiative (not a roadmap feature) building
 toward a publishable finding: **structure standardization is not reproducible
 across protocols, and the disagreement can be quantified and attributed to
-specific causes.** Stage R1 (the protocol engine) is complete; R2–R6 continue
-the analysis, GUI, benchmark, and manuscript.
+specific causes.** All six stages (R1–R6) are complete: the protocol engine,
+divergence analysis with ablation-based cause attribution, dataset metrics, an
+interactive GUI panel, a CLI benchmark harness, and a manuscript draft populated
+with real results.
 
 **Why it's useful:** Standardization (§4) is mandatory in every cheminformatics
 pipeline, but different tools/settings produce different "standard" structures
@@ -635,16 +637,38 @@ Cheminformatics* or a Frontiers methods/tools venue).
   observe which flip changes the outcome, attributing each divergence to a
   specific cause rather than just flagging "these disagree."
 
-**Workflow (current — R1 is a service, not yet a GUI feature):**
-1. Run `standardize(mol, protocol)` for any of the three presets (or a custom
-   `StandardizationProtocol`) to get a `StandardForm` with both identity keys.
-2. Compare `StandardForm.smiles` / `.inchikey` across protocols to see
-   divergence directly (see `learning/research-track-R1-protocol-engine/demo_divergence.py`
-   for a runnable demonstration).
-3. **Coming in R2–R6:** dataset-wide divergence analysis with cause
-   attribution, a reproducibility score and agreement heatmap, a GUI panel
-   showing labile molecules side-by-side with highlighted differences, a
-   benchmark over public ChEMBL/PubChem/ZINC data, and the manuscript itself.
+**Mechanism (R2–R6, complete):**
+- **R2 (divergence):** `analyze_molecule`/`analyze_divergence` standardize a
+  molecule (or dataset) with every protocol, check agreement on both identity
+  conventions, and — for labile molecules — run **ablation**: toggle each
+  operation off the richest protocol one at a time; the first operation whose
+  removal changes the outcome is recorded as the cause.
+- **R3 (metrics):** `compute_metrics` turns a divergence run into a
+  reproducibility score, a pairwise protocol-agreement matrix, and a cause
+  spectrum (fraction of labile molecules each operation explains).
+- **R4 (GUI):** a **Research** menu → *Reproducibility Audit…* dialog (pick
+  protocols, toggle ablation) runs in the background and populates a panel with
+  a protocol-agreement heatmap, a cause-spectrum bar chart, and a sortable list
+  of labile molecules — all Matplotlib-rendered with export to PNG/PDF/SVG.
+- **R5 (benchmark):** a Qt-free CLI (`python -m wawekit.services.reproducibility.benchmark`)
+  runs the whole pipeline over a SMILES file and reports the numbers a paper
+  needs. Run for real on a 40-molecule illustrative set: **70.0%
+  SMILES-reproducible, 75.0% InChIKey-reproducible**, with charge handling
+  (41.7% of divergences) and salt/fragment handling (33.3%) the dominant causes.
+- **R6 (manuscript):** a full IMRAD draft populated with the real R5 numbers,
+  ready to scale to a public ChEMBL/PubChem/DrugBank benchmark for submission.
+
+**Workflow:**
+1. **Research → Reproducibility Audit…** in the desktop app, or run the CLI:
+   `python -m wawekit.services.reproducibility.benchmark molecules.smi --out results.csv`.
+2. Choose which protocols to compare (Minimal/ChEMBL-like/Aggressive by
+   default) and whether to attribute causes (slower).
+3. Review the headline reproducibility score, the protocol-agreement heatmap,
+   the cause-spectrum chart, and the list of labile molecules with their
+   attributed causes.
+4. See `learning/research-track-R2-to-R6-summary/`,
+   `learning/research-track-R5-benchmark/` (raw results), and
+   `learning/research-track-R6-manuscript/manuscript_draft.md` (the paper draft).
 
 ---
 

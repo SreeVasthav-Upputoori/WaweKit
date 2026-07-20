@@ -78,6 +78,7 @@ _HEADERS: tuple[str, ...] = (
     "Scaffold",
     "Cluster",
     "Substructure",
+    "Alerts",
     "Source",
 )
 
@@ -98,7 +99,8 @@ SIMILARITY_COLUMN = _FINGERPRINT_COLUMN + 1
 SCAFFOLD_COLUMN = SIMILARITY_COLUMN + 1
 CLUSTER_COLUMN = SCAFFOLD_COLUMN + 1
 SUBSTRUCTURE_COLUMN = CLUSTER_COLUMN + 1
-_SOURCE_COLUMN = SUBSTRUCTURE_COLUMN + 1
+ALERTS_COLUMN = SUBSTRUCTURE_COLUMN + 1
+_SOURCE_COLUMN = ALERTS_COLUMN + 1
 
 #: Shown in the Scaffold column for a molecule with no ring system.
 _ACYCLIC_CELL = "(acyclic)"
@@ -136,6 +138,17 @@ _SUBSTRUCTURE_TOOLTIP = (
     "'✓ N' = N matches, '—' = no match, blank = not searched. Matched atoms are\n"
     "highlighted in the thumbnail and the Structure panel."
 )
+
+#: Hover text for the alerts column (it has no DescriptorSpec of its own).
+_ALERTS_TOOLTIP = (
+    "Structural warnings (PAINS, Brenk, NIH catalogs), checked automatically\n"
+    "in the background after a load. ⚠️ N = N alerts triggered; hover a cell\n"
+    "for details. A blank cell during a large load means the check hasn't\n"
+    "reached that molecule yet."
+)
+
+#: Shown while the background alerts audit hasn't reached a molecule yet.
+_ALERTS_PENDING_TOOLTIP = "Alerts pending — checked automatically in the background."
 
 
 class MoleculeTableModel(QAbstractTableModel):
@@ -246,6 +259,11 @@ class MoleculeTableModel(QAbstractTableModel):
             return None if record.cluster is None else record.cluster.tooltip
         if column == SUBSTRUCTURE_COLUMN:
             return None if record.substructure_match is None else record.substructure_match.tooltip
+        if column == ALERTS_COLUMN:
+            # Never trigger the compute from a hover — same rule as _display_value.
+            if not record.alerts_computed:
+                return _ALERTS_PENDING_TOOLTIP
+            return "\n".join(record.alerts) if record.alerts else "Clean (no alerts detected)"
         return None
 
     @staticmethod
@@ -340,6 +358,10 @@ class MoleculeTableModel(QAbstractTableModel):
         """Repaint the cluster column after assignments were cached in place."""
         self._columns_updated(CLUSTER_COLUMN, CLUSTER_COLUMN)
 
+    def alerts_updated(self) -> None:
+        """Repaint the alerts column after the background audit filled it in."""
+        self._columns_updated(ALERTS_COLUMN, ALERTS_COLUMN)
+
     def substructure_updated(self) -> None:
         """Repaint after a substructure search.
 
@@ -399,6 +421,13 @@ class MoleculeTableModel(QAbstractTableModel):
             return "" if record.cluster is None else record.cluster.display
         if column == SUBSTRUCTURE_COLUMN:
             return "" if record.substructure_match is None else record.substructure_match.display
+        if column == ALERTS_COLUMN:
+            # Blank until the background audit reaches this record — reading
+            # .alerts here (instead of checking .alerts_computed first) would
+            # run FilterCatalog synchronously on the GUI thread during paint.
+            if not record.alerts_computed:
+                return ""
+            return f"⚠️ {len(record.alerts)}" if record.alerts else ""
         match column:
             case 0:
                 return str(row + 1)
@@ -453,6 +482,10 @@ class MoleculeTableModel(QAbstractTableModel):
             return (
                 None if record.substructure_match is None else record.substructure_match.n_matches
             )
+        if column == ALERTS_COLUMN:
+            # Pending rows sink below checked ones, same convention as every
+            # other lazily-computed column (descriptors, scaffold, cluster).
+            return len(record.alerts) if record.alerts_computed else None
         match column:
             case 0 | 1:
                 return row  # structure column: keep load order (no natural sort)
@@ -564,6 +597,11 @@ class MoleculeTablePanel(QWidget):
         self._proxy.invalidate()
         self._update_filter_status()
 
+    def refresh_alerts(self) -> None:
+        """Repaint the alerts column after the background audit filled it in."""
+        self.model.alerts_updated()
+        self._fix_column_widths()
+
     def refresh_fingerprints(self) -> None:
         """Repaint the fingerprint column after vectors were computed in place."""
         self.model.fingerprints_updated()
@@ -605,6 +643,13 @@ class MoleculeTablePanel(QWidget):
     def apply_scaffold_filter(self, scaffold_filter: ScaffoldFilter | None) -> None:
         """Restrict the table to one scaffold's members (or clear with ``None``)."""
         self._proxy.set_scaffold_filter(scaffold_filter)
+        self._update_filter_status()
+
+    def apply_property_range_filter(self, ranges: dict[str, tuple[float, float]] | None) -> None:
+        """Filter rows by descriptor property ranges (or clear with None)."""
+        from wawekit.gui.widgets.molecule_filter import PropertyRangeFilter
+
+        self._proxy.set_property_range_filter(PropertyRangeFilter(ranges) if ranges else None)
         self._update_filter_status()
 
     def refresh_similarity(self) -> None:

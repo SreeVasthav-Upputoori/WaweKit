@@ -66,9 +66,19 @@ class MoleculeDivergence:
         return not (self.smiles_agree and self.inchikey_agree)
 
     @property
+    def n_failed(self) -> int:
+        """Number of protocols that failed outright on this molecule."""
+        return sum(1 for f in self.forms if f.error is not None)
+
+    @property
+    def all_failed(self) -> bool:
+        """Whether every protocol failed — no identity was produced at all."""
+        return bool(self.forms) and all(f.error is not None for f in self.forms)
+
+    @property
     def n_distinct_smiles(self) -> int:
         """Number of distinct canonical-SMILES forms produced."""
-        return len({f.smiles for f in self.forms if f.ok or f.smiles})
+        return len({f.smiles for f in self.forms if f.smiles})
 
     @property
     def n_distinct_inchikeys(self) -> int:
@@ -137,8 +147,14 @@ def analyze_molecule(
 
     """
     forms = tuple(standardize(mol, p) for p in protocols)
-    smiles_agree = len({f.smiles for f in forms}) <= 1
-    inchikey_agree = len({f.inchikey for f in forms}) <= 1
+    # Agreement is judged only across forms that produced a value: a protocol
+    # *failing* is a failure (tracked via n_failed/all_failed), not evidence of
+    # divergence — and a molecule every protocol failed on must not be counted
+    # as "reproducible" just because the empty results happen to match.
+    smiles_values = {f.smiles for f in forms if f.error is None}
+    inchikey_values = {f.inchikey for f in forms if f.inchikey}
+    smiles_agree = len(smiles_values) <= 1
+    inchikey_agree = len(inchikey_values) <= 1
 
     causes: tuple[StandardOp, ...] = ()
     if attribute_causes and not (smiles_agree and inchikey_agree):
@@ -189,6 +205,15 @@ class DivergenceRun:
     def n_inchikey_labile(self) -> int:
         """Molecules where InChIKey identity disagrees across protocols."""
         return sum(1 for r in self.results if not r.inchikey_agree)
+
+    @property
+    def n_with_failures(self) -> int:
+        """Molecules where at least one protocol failed outright.
+
+        Failures are reported separately from lability: a failed protocol
+        produced no identity, so it is evidence of fragility, not divergence.
+        """
+        return sum(1 for r in self.results if r.n_failed > 0)
 
     def cause_counts(self) -> dict[StandardOp, int]:
         """Return how many labile molecules implicate each operation.

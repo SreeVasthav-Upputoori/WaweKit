@@ -11,6 +11,9 @@ graphical abstract and build notes for every completed module.
 what it is, why it's useful, real-world applications, how it works internally,
 and the step-by-step workflow to use it.
 
+**→ See [PACKAGING.md](PACKAGING.md)** for building a distributable desktop
+bundle with PyInstaller.
+
 ## Architecture at a glance
 
 Wawekit uses a strict layered architecture where dependencies only point

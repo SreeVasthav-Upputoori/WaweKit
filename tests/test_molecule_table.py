@@ -9,6 +9,7 @@ from wawekit.gui.widgets.molecule_table import (
     _FINGERPRINT_COLUMN,
     _FIRST_DESCRIPTOR_COLUMN,
     _SOURCE_COLUMN,
+    ALERTS_COLUMN,
     SCAFFOLD_COLUMN,
     SIMILARITY_COLUMN,
     MoleculeTableModel,
@@ -18,6 +19,7 @@ from wawekit.gui.widgets.structure_delegate import RECORD_ROLE
 from wawekit.models.descriptors import DESCRIPTOR_SPECS
 from wawekit.models.molecule import MoleculeRecord
 from wawekit.models.scaffold import ScaffoldRepresentation
+from wawekit.services.chemistry.alerts import compute_alerts_for_records
 from wawekit.services.chemistry.descriptors import compute_descriptors
 from wawekit.services.chemistry.fingerprints import compute_fingerprints
 from wawekit.services.chemistry.scaffolds import compute_scaffolds
@@ -37,8 +39,9 @@ def test_model_starts_empty(qtbot):
     model = MoleculeTableModel()
     assert model.rowCount() == 0
     # 6 leading (# Structure Name SMILES Formula "Heavy atoms") + descriptor
-    # panel + Fingerprint + Similarity + Scaffold + Cluster + Substructure + Source.
-    assert model.columnCount() == 6 + len(DESCRIPTOR_SPECS) + 6
+    # panel + Fingerprint + Similarity + Scaffold + Cluster + Substructure +
+    # Alerts + Source.
+    assert model.columnCount() == 6 + len(DESCRIPTOR_SPECS) + 7
 
 
 def test_model_append_and_display(qtbot):
@@ -184,6 +187,79 @@ def test_fingerprint_cell_tooltip_carries_full_parameters(qtbot):
 
     tip = model.data(model.index(0, _FINGERPRINT_COLUMN), Qt.ItemDataRole.ToolTipRole)
     assert "Morgan r2" in tip and "2048" in tip
+
+
+def test_alerts_cell_blank_until_computed(qtbot):
+    # Regression: this must read as blank, not trigger FilterCatalog compute
+    # from a paint — see services/chemistry/alerts.py for the full story.
+    model = MoleculeTableModel()
+    records = _records(("CCO", "ethanol"))
+    model.append_records(records)
+
+    assert model.data(model.index(0, ALERTS_COLUMN)) == ""
+    assert not records[0].alerts_computed  # reading the cell must not trigger it
+
+
+def test_alerts_cell_blank_sorts_below_computed_rows(qtbot):
+    model = MoleculeTableModel()
+    records = _records(("CCO", "ethanol"), ("O=C1C=CC(=O)C=C1", "quinone"))
+    model.append_records(records)
+    compute_alerts_for_records([records[1]])  # only the quinone gets checked
+
+    pending = model.data(model.index(0, ALERTS_COLUMN), Qt.ItemDataRole.UserRole)
+    checked = model.data(model.index(1, ALERTS_COLUMN), Qt.ItemDataRole.UserRole)
+    assert pending is None
+    assert checked == len(records[1].alerts)  # a real count, not a guessed one
+    assert checked > 0
+
+
+def test_alerts_cell_shows_warning_badge_after_background_compute(qtbot):
+    model = MoleculeTableModel()
+    records = _records(("O=C1C=CC(=O)C=C1", "quinone"))
+    model.append_records(records)
+    compute_alerts_for_records(records)
+    model.alerts_updated()
+
+    assert model.data(model.index(0, ALERTS_COLUMN)) == f"⚠️ {len(records[0].alerts)}"
+
+
+def test_alerts_cell_blank_for_a_clean_molecule_after_compute(qtbot):
+    # A checked-and-clean molecule must still read as blank, not "⚠️ 0" —
+    # the badge only appears when there is something to warn about.
+    model = MoleculeTableModel()
+    records = _records(("CCO", "ethanol"))
+    model.append_records(records)
+    compute_alerts_for_records(records)
+    model.alerts_updated()
+
+    assert model.data(model.index(0, ALERTS_COLUMN)) == ""
+    assert records[0].alerts_computed
+
+
+def test_alerts_tooltip_distinguishes_pending_from_clean(qtbot):
+    model = MoleculeTableModel()
+    records = _records(("CCO", "ethanol"))
+    model.append_records(records)
+
+    pending_tip = model.data(model.index(0, ALERTS_COLUMN), Qt.ItemDataRole.ToolTipRole)
+    assert "pending" in pending_tip.lower()
+
+    compute_alerts_for_records(records)
+    clean_tip = model.data(model.index(0, ALERTS_COLUMN), Qt.ItemDataRole.ToolTipRole)
+    assert "clean" in clean_tip.lower()
+
+
+def test_panel_refresh_alerts_repaints_the_column(qtbot):
+    panel = MoleculeTablePanel()
+    qtbot.addWidget(panel)
+    records = _records(("O=C1C=CC(=O)C=C1", "quinone"))
+    panel.append_records(records)
+    compute_alerts_for_records(records)
+
+    panel.refresh_alerts()
+
+    index = panel.model.index(0, ALERTS_COLUMN)
+    assert panel.model.data(index) == f"⚠️ {len(records[0].alerts)}"
 
 
 def test_source_column_still_last_after_inserting_fingerprint(qtbot):

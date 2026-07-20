@@ -239,6 +239,32 @@ def parse_filter(text: str) -> RecordFilter | None:
     return TextFilter(query)
 
 
+@dataclass(frozen=True, slots=True)
+class PropertyRangeFilter:
+    """Keep only molecules whose descriptors lie within active min/max ranges.
+
+    This channel is set dynamically by interacting with the range spinboxes
+    in the Property Filters panel.
+    """
+
+    ranges: dict[str, tuple[float, float]]  # key.lower() -> (min, max)
+
+    def matches(self, record: MoleculeRecord) -> bool:
+        """Return True if the record's descriptors lie within all range filters.
+
+        Records without computed descriptors are hidden (unknown status).
+        """
+        if record.descriptors is None:
+            return False
+        for key, (min_val, max_val) in self.ranges.items():
+            spec = DESCRIPTOR_BY_KEY.get(key)
+            if spec is not None:
+                val = spec.getter(record.descriptors)
+                if not (min_val <= val <= max_val):
+                    return False
+        return True
+
+
 class MoleculeFilterProxyModel(QSortFilterProxyModel):
     """Sorting proxy that also filters rows through a :class:`RecordFilter`.
 
@@ -251,11 +277,12 @@ class MoleculeFilterProxyModel(QSortFilterProxyModel):
     def __init__(self, parent=None) -> None:  # noqa: ANN001 — QObject
         super().__init__(parent)
         # Independent channels, combined with AND: the text box the user types
-        # into, the scaffold chosen in the Scaffolds panel, and the substructure
-        # search's "matches only" toggle.
+        # into, the scaffold chosen in the Scaffolds panel, the substructure
+        # search's "matches only" toggle, and the descriptor property range sliders.
         self._filter: RecordFilter | None = None
         self._scaffold_filter: ScaffoldFilter | None = None
         self._substructure_filter: SubstructureFilter | None = None
+        self._property_range_filter: PropertyRangeFilter | None = None
 
     # ------------------------------------------------------------- public API
     def set_query(self, text: str) -> RecordFilter | None:
@@ -286,6 +313,12 @@ class MoleculeFilterProxyModel(QSortFilterProxyModel):
         self.invalidate()
         logger.debug("Substructure filter set to %r", substructure_filter)
 
+    def set_property_range_filter(self, range_filter: PropertyRangeFilter | None) -> None:
+        """Restrict rows to descriptor property ranges (or clear with ``None``)."""
+        self._property_range_filter = range_filter
+        self.invalidate()
+        logger.debug("Property range filter set to %r", range_filter)
+
     @property
     def active_filter(self) -> RecordFilter | None:
         """The text filter currently applied (``None`` when the box is empty)."""
@@ -301,11 +334,21 @@ class MoleculeFilterProxyModel(QSortFilterProxyModel):
         """The substructure restriction currently applied (``None`` when off)."""
         return self._substructure_filter
 
+    @property
+    def property_range_filter(self) -> PropertyRangeFilter | None:
+        """The descriptor property range restriction currently applied."""
+        return self._property_range_filter
+
     def _active_channels(self) -> tuple[RecordFilter, ...]:
         """Return every filter channel that is currently switched on."""
         return tuple(
             f
-            for f in (self._filter, self._scaffold_filter, self._substructure_filter)
+            for f in (
+                self._filter,
+                self._scaffold_filter,
+                self._substructure_filter,
+                self._property_range_filter,
+            )
             if f is not None
         )
 

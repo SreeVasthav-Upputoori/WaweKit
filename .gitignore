@@ -14,8 +14,10 @@ dist/
 *.egg-info/
 .eggs/
 
-# PyInstaller
+# PyInstaller (wawekit.spec is hand-written and deliberately tracked — only
+# ignore auto-generated ones some other tool might drop elsewhere)
 *.spec
+!/wawekit.spec
 *.manifest
 
 # Test / coverage
