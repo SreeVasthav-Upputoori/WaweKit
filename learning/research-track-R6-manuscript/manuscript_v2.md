@@ -24,16 +24,30 @@ of protocols, the method determines whether they agree on each molecule's
 standardized identity — evaluated under two identity conventions, canonical
 SMILES and InChIKey, which we show are not interchangeable — and attributes
 each disagreement to a specific normalization operation by systematic ablation.
-Applied to a seeded random sample of 4,972 ChEMBL structures, three
-representative protocols (Minimal, ChEMBL-like, Aggressive) agreed on 54.1% of
-molecules under canonical-SMILES identity (95% CI 52.8–55.5%) and 57.7% under
-InChIKey identity (56.3–59.0%). Ablation attributed divergence predominantly to
-stereochemistry handling (66.6% of divergent molecules) and tautomer
-canonicalization (22.1%), with charge and fragment handling accounting for
-under 10% combined. We show that this spectrum is a joint property of dataset
-composition and protocol contrast rather than an intrinsic ranking of
-operations, and that a hand-assembled benchmark inverts it — an argument for
-auditing the dataset actually in use.
+Applied to a seeded random sample of 4,972 ChEMBL structures, three protocols
+bracketing the plausible range — a minimal one, one approximating the ChEMBL
+curation pipeline, and a deliberate upper-bound stress case — agreed on 54.1%
+of molecules under canonical-SMILES identity (95% CI 52.8–55.5%) and 57.7%
+under InChIKey identity (56.3–59.0%). Ablation attributed divergence
+predominantly to stereochemistry handling (66.6% of divergent molecules) and
+tautomer canonicalization (22.1%). Disabling stereochemistry removal, which no
+major public pipeline performs, raises agreement to 75.5% and leaves tautomer
+canonicalization responsible for 87.4% of what remains — so the headline figure
+is a property of the protocols compared, not an intrinsic property of the data.
+We show this explicitly: the cause spectrum is a joint function of dataset
+composition and protocol contrast, and a hand-assembled benchmark inverts it —
+an argument for auditing the dataset actually in use rather than relying on
+published rates.
+
+Extending the comparison to the pipelines databases actually run — ChEMBL's own
+curation code and MolVS in two configurations — establishes two further
+results. Our composed ChEMBL-like protocol reproduces ChEMBL's production
+pipeline on 99.8% of structures, so conclusions drawn from the composed
+protocols transfer to the real one. And two configurations of a single
+standardizer agreed with each other on only 56.0% of structures, while two
+independently developed standardizers agreed on 77.2% — configuration choice
+within one tool spans a wider range of outcomes than the choice between tools,
+so naming the software used is not sufficient provenance.
 
 To establish whether such divergence carries a practical cost, we applied the
 same protocols to 27,152 IC50 measurements across four targets. Because
@@ -156,20 +170,39 @@ their outputs comparable and any single operation's effect isolable by
 ablation. Standardization is applied to a copy of each input molecule; input
 structures are never mutated.
 
-Three representative protocols are used throughout:
+Three protocols are used throughout:
 
-- **Minimal** — normalization only (operation 2). A light-touch baseline
-  representing the least a pipeline might reasonably do.
+- **Minimal** — normalization only (operation 2). A light-touch lower bound:
+  the least a pipeline might do while still doing something.
 - **ChEMBL-like** — operations 1–5, deliberately *excluding* tautomer
   canonicalization, approximating the published ChEMBL curation pipeline [1].
-- **Aggressive** — all eight operations.
+  This is the only one of the three intended to resemble a deployed pipeline.
+- **Aggressive** — all eight operations. An upper bound rather than a
+  recommendation.
 
-These are not an exhaustive survey of deployed pipelines but three points
-spanning the range of reasonable practice, chosen so that the pairwise
-comparisons differ by controlled numbers of operations: ChEMBL-like versus
-Aggressive differ by three (isotope removal, stereochemistry removal, tautomer
-canonicalization), Minimal versus ChEMBL-like by four, and Minimal versus
-Aggressive by seven.
+The status of these protocols requires stating precisely, because it bounds
+what the reported numbers mean. They are **not a survey of deployed
+pipelines**, and Aggressive in particular is not one: it removes
+stereochemistry and isotopic labelling, which neither the ChEMBL pipeline [1]
+nor the PubChem standardization service [3] does, and which would be
+inappropriate for most bioactivity work. It is included deliberately as a
+stress case that brackets the plausible range from above, so that the span
+between Minimal and Aggressive characterises how far protocol choice *can*
+move a dataset's identities, not how far it typically does.
+
+Two consequences follow, and both are load-bearing for interpreting §3. First,
+the headline reproducibility figures describe the full bracket and should not
+be read as the disagreement a practitioner would encounter between two
+production pipelines; §3.5 reports the same audit with stereochemistry removal
+disabled, which is the more practice-relevant comparison. Second, because the
+protocols differ by controlled numbers of operations — ChEMBL-like versus
+Aggressive by three, Minimal versus ChEMBL-like by four, Minimal versus
+Aggressive by seven — the design isolates the effect of operation count from
+the effect of which particular operations differ (§3.3).
+
+Grounding the protocol set in the actual behaviour of deployed standardizers,
+rather than in compositions of RDKit operations chosen by us, is the most
+important extension of this work and is discussed in §4.4.
 
 ### 2.2 Identity conventions and divergence
 
@@ -563,13 +596,71 @@ a safety call on one molecule — and is invisible to a summary statistic
 computed over thousands. Detecting it requires inspecting the merges, which is
 what the audit reported here does.
 
+### 3.8 Cross-toolkit divergence between production pipelines
+
+The protocols compared so far are compositions of RDKit operations that we
+defined (§2.1). This section replaces them with the standardization pipelines
+that databases actually run, which tests both whether our compositions are
+faithful and whether the disagreement practitioners meet is larger or smaller
+than the bracket we constructed.
+
+Five standardizers were compared over the same 4,972-structure sample: the
+composed Minimal and ChEMBL-like protocols; **ChEMBL's own curation pipeline**,
+executed through the `chembl_structure_pipeline` package in its documented
+two-stage form, i.e. the code the database itself runs; and **MolVS** in two
+configurations, its default `standardize()` and its `super_parent()`, which
+additionally strips fragments, charge, isotopes and stereochemistry. No
+standardizer failed on any structure.
+
+| Pair | InChIKey | Canonical SMILES |
+|---|---|---|
+| ChEMBL-like (composed) vs ChEMBL pipeline (real) | **99.8%** | 99.8% |
+| Minimal vs MolVS default | 100.0% | 100.0% |
+| Minimal vs ChEMBL-like | 96.1% | 96.1% |
+| Minimal vs ChEMBL pipeline | 96.1% | 96.1% |
+| ChEMBL-like vs MolVS default | 96.1% | 96.1% |
+| ChEMBL pipeline vs MolVS default | 96.1% | 96.1% |
+| ChEMBL-like vs MolVS super-parent | 58.3% | 45.7% |
+| ChEMBL pipeline vs MolVS super-parent | 58.3% | 45.7% |
+| Minimal vs MolVS super-parent | 56.0% | 43.8% |
+| MolVS default vs MolVS super-parent | 56.0% | 43.8% |
+
+**The composed protocols are faithful.** Our ChEMBL-like protocol agrees with
+ChEMBL's production pipeline on **99.8%** of structures — eight structures in
+4,972 differ. The approximation is therefore accurate enough that conclusions
+drawn from it transfer to the real pipeline, which is a claim §2.1 could
+previously only assert. Similarly, MolVS's default configuration agrees with
+our Minimal protocol on 100% of the sample, confirming that MolVS's default
+normalizes without removing salts or charge.
+
+**Configuration matters more than toolkit.** The two MolVS configurations agree
+with each other on only 56.0% of structures, while ChEMBL's pipeline and MolVS
+agree on 77.2% averaged across MolVS's configurations. **Two configurations of
+the same tool disagreed more than two independently developed tools did.** The
+practical implication contradicts the intuitive reporting convention: naming
+the software used is not sufficient provenance, because the within-tool
+configuration space spans a wider range of outcomes than the between-tool
+difference does. What must be recorded is the configuration, and the protocol
+model of §2.1 is one way to record it precisely.
+
+**Attribution coverage is limited here, by construction.** The cause spectrum
+over this comparison is sparse — fragment selection 6.9% of divergent
+structures, charge neutralization 0.9%, normalization 0.1% — because the
+dominant source of divergence is MolVS's super-parent configuration, which is
+an opaque pipeline whose steps cannot be individually disabled. Ablation can
+only attribute the portion of divergence traceable to the composed protocols.
+This is a real limit of the method rather than a null result, and the
+implementation reports it as such: a standardizer declares whether it is
+ablatable, and attribution is skipped rather than returning an empty cause list
+that would read as "no cause found".
+
 ---
 
 ## 4. Discussion
 
 ### 4.1 Practical implications
 
-Four findings bear directly on curation practice.
+Five findings bear directly on curation practice.
 
 First, and most consequentially, **an unchanged evaluation metric does not
 license a standardization change.** The downstream experiment (§3.7) found
@@ -582,13 +673,21 @@ concentrated in a small number of compounds rather than spread across the
 dataset, it survives averaging. Detecting it requires inspecting the merges,
 which is what an audit does and a summary statistic cannot.
 
-Second, **identity convention must be reported.** A dataset that is 57.7%
+Second, **naming the software is not sufficient provenance.** §3.8 found two
+configurations of a single standardizer agreeing on 56.0% of structures while
+two independently developed standardizers agreed on 77.2%. "Structures were
+standardized with MolVS" therefore locates a pipeline less precisely than a
+reader needs, because the within-tool configuration space is wider than the
+between-tool gap. What must be recorded is the configuration — which the
+protocol model of §2.1 provides a compact vocabulary for.
+
+Third, **identity convention must be reported.** A dataset that is 57.7%
 reproducible under InChIKey is 54.1% reproducible under canonical SMILES;
 "we deduplicated by InChIKey" and "we standardized structures identically" are
 different claims, and the gap is concentrated exactly where tautomer ambiguity
 is common.
 
-Third, **protocol distance does not predict disagreement.** Two protocols
+Fourth, **protocol distance does not predict disagreement.** Two protocols
 differing by four operations agreed on 96.1% of molecules while two differing by
 three agreed on 60.0%. What matters is the interaction between the differing
 operations and the composition of the dataset, which cannot be known in advance
@@ -600,7 +699,7 @@ stereoisomer pairs with genuinely different activity is exactly the collection
 that stereochemistry removal collapses. Which operations are dangerous is a
 property of the pharmacology at hand, and is predictable once stated.
 
-Fourth, **the dominant divergence cause is not the one the literature
+Fifth, **the dominant divergence cause is not the one the literature
 emphasises.** Tautomer canonicalization is the most discussed standardization
 ambiguity [3, 4], and it is substantial here (22.1%), but stereochemistry
 handling accounts for three times as much divergence in this sample. That is a
@@ -638,24 +737,39 @@ follow-up and have not performed it here.
    which assume independent sampling, are optimistic. They should be read as
    lower bounds on the true interval width. A design-effect correction or a
    simple random sample obtained from a full database dump would remove this.
-2. **Attribution scope.** Causes can only be attributed among the eight
+2. **The composed protocols bracket a range rather than sampling practice.**
+   The three protocols of §2.1 are compositions chosen by us, and Aggressive in
+   particular removes stereochemistry and isotopic labelling, which neither
+   ChEMBL [1] nor PubChem [3] does. It is a stress case, and it drives two
+   thirds of the divergence reported in §3.4; the practice-relevant figure is
+   therefore the stereochemistry-disabled comparison of §3.5 (75.5% / 80.1%),
+   not the headline 54.1% / 57.7%. §3.8 substantially mitigates this by
+   repeating the audit against production pipelines, and establishes that the
+   composed ChEMBL-like protocol reproduces ChEMBL's real pipeline on 99.8% of
+   structures — the compositions are faithful where they claim to be. What
+   remains unsampled is the wider population of deployed configurations: two
+   standardizer packages in four configurations is not a survey of the field.
+3. **Attribution scope.** Causes can only be attributed among the eight
    operations in the protocol model. Divergence arising from a different
    aromaticity perception model, a different tautomer scoring function, or a
    non-RDKit standardizer is invisible to the procedure.
-3. **Joint causes.** Single-operation ablation cannot attribute divergence
+4. **Joint causes.** Single-operation ablation cannot attribute divergence
    determined jointly by two or more operations; 12.2% of divergent molecules
    were unattributed for this reason (§3.4). A combinatorial ablation would
    resolve these at exponential cost.
-4. **Single-toolkit study.** All three protocols are RDKit-based. Cross-toolkit
-   divergence — plausibly where the largest real-world disagreement lives, as
-   the PubChem/InChI comparison suggests [3] — is out of scope by construction.
-5. **Pre-curated source** (§4.2).
-6. **No external validation of attribution correctness.** The procedure has not
+5. **Toolkit coverage is partial.** §3.8 extends the comparison beyond RDKit to
+   ChEMBL's production pipeline and to MolVS, but both are Python packages
+   built on RDKit's chemistry layer. Standardizers implemented on independent
+   chemistry engines — PubChem's service [3], commercial toolkits — would need
+   their own adapters, and divergence between engines may exceed the
+   within-engine differences measured here.
+6. **Pre-curated source** (§4.2).
+7. **No external validation of attribution correctness.** The procedure has not
    been validated against ground truth. The curated tautomer database of Dhaked
    et al. [4], which provides experimentally annotated tautomeric tuples, is a
    natural substrate for measuring attribution precision and recall; this
    remains future work.
-7. **The downstream null is bounded by what it tested.** The absence of a
+8. **The downstream null is bounded by what it tested.** The absence of a
    detectable effect on model performance (§3.7) holds for one model family
    (random forest on circular fingerprints), one task type (single-target
    regression on pIC50) and one evaluation protocol (random-split
@@ -665,17 +779,28 @@ follow-up and have not performed it here.
    few-shot and active-learning regimes where individual labels carry far more
    weight. The claim is that aggregate random-split regression metrics do not
    detect this corruption — not that no analysis can.
-8. **Discordance threshold.** Labelling a merge "discordant" above one log unit
+9. **Discordance threshold.** Labelling a merge "discordant" above one log unit
    is a convention. Counts at 0.5–2.0 log units are recorded alongside, but the
    headline figures use the single conventional cut.
 
 ### 4.4 Future work
 
-The priorities, in order: extend the protocol model across toolkits so that
-cross-implementation divergence becomes measurable, since the PubChem/InChI
-comparison [3] suggests that is where the largest disagreement lies; run the
-identical audit on an uncurated structure source to quantify the pre-curation
-confound (§4.2); test whether the downstream null survives evaluation designs
+One extension dominates the rest. **Grounding the protocol set in deployed
+standardizers** — driving the ChEMBL and PubChem services directly, alongside
+RDKit and MolVS defaults, rather than composing operations ourselves — would
+convert the central limitation (§4.3, item 2) into a strength. It would replace
+a constructed bracket with a measurement of the disagreement practitioners
+actually face when merging data across sources; it would let the audit answer
+"do these two databases agree about my compound?", which is the question the
+field has; and because PubChem already reports 60% disagreement against InChI
+round-tripping [3], cross-implementation divergence is likely larger than the
+within-RDKit variation measured here. The methodological contribution — the
+protocol model, the dual-identity measure, ablation attribution — carries over
+unchanged; only the protocol definitions would be replaced.
+
+The remaining priorities, in order: run the identical audit on an uncurated
+structure source to quantify the pre-curation confound (§4.2); test whether the
+downstream null survives evaluation designs
 that stress generalisation, particularly scaffold and time splits, where a
 handful of corrupted labels in a held-out series could matter considerably more
 than they do under random splitting; validate attribution accuracy against the

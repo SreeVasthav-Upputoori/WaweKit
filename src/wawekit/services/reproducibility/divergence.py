@@ -118,35 +118,71 @@ def _attribute_cause(mol: Chem.Mol, protocol: StandardizationProtocol) -> list[S
     return inchikey_movers + smiles_movers
 
 
+def _standardize_with(mol: Chem.Mol, standardizer: object) -> StandardForm:
+    """Standardize with either a composed protocol or an external standardizer.
+
+    Accepting both is what lets a single audit compare protocols we compose
+    against production pipelines we do not control (see
+    :mod:`.standardizers`). Duck-typed on ``standardize_mol`` rather than
+    isinstance-checked, so the protocol path stays free of any import from the
+    adapter module.
+    """
+    if hasattr(standardizer, "standardize_mol"):
+        return standardizer.standardize_mol(mol)
+    return standardize(mol, standardizer)
+
+
+def _ablatable_protocols(standardizers: tuple[object, ...]) -> list[StandardizationProtocol]:
+    """Return the composed protocols among ``standardizers``.
+
+    Cause attribution needs operations it can switch off, which an opaque
+    external pipeline does not provide.
+    """
+    protocols: list[StandardizationProtocol] = []
+    for item in standardizers:
+        if isinstance(item, StandardizationProtocol):
+            protocols.append(item)
+        elif getattr(item, "is_ablatable", False) and hasattr(item, "protocol"):
+            protocols.append(item.protocol)
+    return protocols
+
+
 def analyze_molecule(
     mol: Chem.Mol,
-    protocols: tuple[StandardizationProtocol, ...],
+    protocols: tuple[object, ...],
     name: str = "",
     attribute_causes: bool = True,
 ) -> MoleculeDivergence:
-    """Standardize ``mol`` with every protocol and analyze the divergence.
+    """Standardize ``mol`` with every standardizer and analyze the divergence.
 
     Parameters
     ----------
     mol:
         The molecule to check.
     protocols:
-        The protocols to compare (order defines the ``forms`` order).
+        The standardizers to compare, in the order their forms are reported.
+        Each may be a composed
+        :class:`~wawekit.services.reproducibility.protocol.StandardizationProtocol`
+        or any object satisfying
+        :class:`~wawekit.services.reproducibility.standardizers.Standardizer`,
+        so a comparison may mix composed protocols with production pipelines.
     name:
         Display name for reporting.
     attribute_causes:
-        If ``True`` and the molecule is labile, run ablation against the most
-        thorough (most-operations) protocol to attribute a cause. Ablation costs
-        one extra standardization per operation, so it can be disabled for a
-        fast first pass over a large dataset.
+        If ``True`` and the molecule is labile, run ablation to attribute a
+        cause. Attribution requires at least one *ablatable* standardizer; a
+        comparison consisting only of opaque external pipelines reports
+        divergence without causes, which is a limit of what can be known rather
+        than a failure to find one. Ablation costs one extra standardization
+        per operation, so it can be disabled for a fast first pass.
 
     Returns
     -------
     MoleculeDivergence
-        The per-protocol forms and the agreement/cause analysis.
+        The per-standardizer forms and the agreement/cause analysis.
 
     """
-    forms = tuple(standardize(mol, p) for p in protocols)
+    forms = tuple(_standardize_with(mol, p) for p in protocols)
     # Agreement is judged only across forms that produced a value: a protocol
     # *failing* is a failure (tracked via n_failed/all_failed), not evidence of
     # divergence — and a molecule every protocol failed on must not be counted
@@ -158,8 +194,10 @@ def analyze_molecule(
 
     causes: tuple[StandardOp, ...] = ()
     if attribute_causes and not (smiles_agree and inchikey_agree):
-        richest = max(protocols, key=lambda p: len(p.operations))
-        causes = tuple(_attribute_cause(mol, richest))
+        ablatable = _ablatable_protocols(protocols)
+        if ablatable:
+            richest = max(ablatable, key=lambda p: len(p.operations))
+            causes = tuple(_attribute_cause(mol, richest))
 
     return MoleculeDivergence(
         name=name,

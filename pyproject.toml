@@ -50,10 +50,18 @@ gui = [
     "PySide6>=6.6",
     "matplotlib>=3.8",
 ]
+# Third-party standardizers the reproducibility auditor can compare against.
+# Optional because the auditor is fully usable without them — they widen a
+# comparison from "protocols we compose" to "pipelines other people deployed",
+# and a user who only wants the former should not have to install them.
+standardizers = [
+    "chembl_structure_pipeline>=1.2",
+    "molvs>=0.1.1",
+]
 # Installed with:  pip install -e ".[dev]"
 # Includes [gui] because the test suite covers the desktop application.
 dev = [
-    "wawekit[gui]",
+    "wawekit[gui,standardizers]",
     "pytest>=8.0",
     "pytest-qt>=4.4",
     "black>=24.0",

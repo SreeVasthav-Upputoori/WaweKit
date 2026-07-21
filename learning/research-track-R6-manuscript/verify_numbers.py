@@ -37,6 +37,8 @@ SENSITIVITY = BENCH / "chembl_sensitivity_nostereo.json"
 #: §3.7's downstream experiment — merge counts, dataset losses, activity
 #: spreads and QSAR scores — lives in its own results file.
 DOWNSTREAM = HERE.parent / "research-track-R7-downstream" / "downstream_results.json"
+#: §3.8's cross-toolkit comparison against production standardizers.
+CROSSTOOLKIT = HERE.parent / "research-track-R9-crosstoolkit" / "crosstoolkit_results.json"
 TOLERANCE = 0.0006  # quoted to 1 d.p. as a percentage
 
 
@@ -171,6 +173,39 @@ def collect_downstream_values() -> tuple[set[float], set[int]]:
     return props, counts
 
 
+def collect_crosstoolkit_values() -> tuple[set[float], set[int]]:
+    """Values from the cross-toolkit comparison (§3.8)."""
+    props: set[float] = set()
+    counts: set[int] = set()
+    if not CROSSTOOLKIT.is_file():
+        return props, counts
+    res = json.loads(CROSSTOOLKIT.read_text(encoding="utf-8"))
+    props.add(round(res["smiles_reproducibility"], 6))
+    props.add(round(res["inchikey_reproducibility"], 6))
+    counts.add(int(res["n_molecules"]))
+    counts.add(int(res["n_labile"]))
+    if res["n_molecules"]:
+        props.add(round(res["n_labile"] / res["n_molecules"], 6))
+    for pair in res["pairwise"]:
+        props.add(round(pair["inchikey"], 6))
+        props.add(round(pair["smiles"], 6))
+    for frac in res.get("cause_spectrum", {}).values():
+        props.add(round(frac, 6))
+    # The within- vs between-tool means the prose quotes.
+    within = [
+        p for p in res["pairwise"] if {p["a"], p["b"]} == {"MolVS default", "MolVS super-parent"}
+    ]
+    between = [
+        p
+        for p in res["pairwise"]
+        if "ChEMBL pipeline" in (p["a"], p["b"]) and ("MolVS" in p["a"] or "MolVS" in p["b"])
+    ]
+    for group in (within, between):
+        if group:
+            props.add(round(sum(p["inchikey"] for p in group) / len(group), 6))
+    return props, counts
+
+
 def main(path: Path) -> int:
     sys.path.insert(0, str(BENCH))
     res = json.loads(RESULTS.read_text(encoding="utf-8"))
@@ -179,6 +214,7 @@ def main(path: Path) -> int:
         collect_pilot_values(),
         collect_sensitivity_values(),
         collect_downstream_values(),
+        collect_crosstoolkit_values(),
     ):
         props |= extra_props
         counts |= extra_counts

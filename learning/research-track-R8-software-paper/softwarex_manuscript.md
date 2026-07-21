@@ -22,7 +22,7 @@ study beyond what is needed to demonstrate that the feature works.
 | Permanent link to Reproducible Capsule | *(Zenodo DOI — to be minted at submission)* |
 | Legal Code License | MIT |
 | Code versioning system used | git |
-| Software code languages, tools, services used | Python 3.12+, PySide6 (Qt 6), RDKit, scikit-learn, matplotlib, ReportLab, 3Dmol.js |
+| Software code languages, tools, services used | Python 3.12+, PySide6 (Qt 6), RDKit, scikit-learn, matplotlib, ReportLab, 3Dmol.js; optionally `chembl_structure_pipeline` and MolVS for cross-toolkit comparison |
 | Compilation requirements, operating environments | Python ≥ 3.12; Windows, macOS, Linux |
 | Link to developer documentation | https://github.com/SreeVasthav-Upputoori/WaweKit/blob/main/docs/FEATURES.md |
 | Support email for questions | *(author contact — to be completed)* |
@@ -138,13 +138,33 @@ assay-interference and liability motifs with per-molecule detail.
 are derived from the loaded dataset.
 
 **Standardization reproducibility auditing.** The distinguishing capability.
-The user selects two or more standardization protocols — each a named subset
-of eight normalization operations applied in fixed order — and WaweKit reports
-how often they produce the same standardized identity, evaluated separately
-under canonical-SMILES and InChIKey identity, and attributes each disagreement
-to a specific operation by systematic ablation. Results are presented as a
-protocol-agreement heatmap, a cause-spectrum chart, and an inspectable list of
-the affected molecules.
+The user selects two or more standardizers, and WaweKit reports how often they
+produce the same standardized identity — evaluated separately under
+canonical-SMILES and InChIKey identity — as an agreement heatmap, a
+cause-spectrum chart, and an inspectable list of the affected molecules.
+
+Two kinds of standardizer can be compared, answering different questions. A
+**composed protocol** is a named subset of eight normalization operations
+applied in fixed order; because its operations are individually addressable,
+each disagreement can be attributed to a specific operation by systematic
+ablation — disabling one operation, re-standardizing, and recording which
+change alters the outcome. A **production pipeline** is a third-party
+standardizer invoked as a black box; WaweKit ships adapters for ChEMBL's
+`chembl_structure_pipeline` (the code the database itself runs) and for MolVS
+in two configurations. A comparison may mix the two freely, so a user can ask
+both "how do my protocol variants differ?" and "does my pipeline agree with
+ChEMBL's?" — the latter being the question that arises whenever data from
+different sources is merged.
+
+The trade-off between the two kinds is made explicit rather than hidden.
+Attribution requires operations that can be switched off, which an opaque
+external pipeline does not offer, so a comparison consisting only of external
+standardizers reports *whether* they disagree without attributing *why*. The
+software distinguishes that from "no cause was found": each standardizer
+declares through its interface whether it is ablatable, and attribution is
+skipped rather than silently returning an empty result that would read as a
+negative finding. Including one composed protocol alongside external pipelines
+restores attribution for the whole comparison.
 
 **Workflow and output.** A batch dialog chaining standardization →
 descriptors → fingerprints → scaffolds → clustering → export as one
@@ -234,8 +254,14 @@ Neither requires the GUI dependencies to be installed.
 ## 4. Impact
 
 **A capability not otherwise available interactively.** To our knowledge no
-other graphical cheminformatics tool measures cross-protocol standardization
-divergence or attributes it to individual normalization operations. Because
+other graphical cheminformatics tool measures standardization divergence,
+attributes it to individual normalization operations, or compares
+independently-developed standardization pipelines against one another. The
+last of these is the practically consequential one: a laboratory merging
+compound data from two sources currently has no straightforward way to ask
+whether the two sources would even agree on which records describe the same
+compound. WaweKit answers that directly by running both pipelines and
+reporting where they part company. Because
 standardization determines which database records are treated as the same
 compound, this affects deduplication, dataset merging and any model trained on
 the result. The companion research paper uses WaweKit to show that protocol
@@ -272,6 +298,7 @@ plainly.
 | Ecosystem / user base | new | large | very large | very large |
 | Scriptable as a library | yes | no | limited | yes |
 | **Standardization reproducibility auditing** | **yes** | no | no | no |
+| **Cross-toolkit standardizer comparison** | **yes** | no | no | no |
 
 DataWarrior and KNIME are more mature, have far larger user communities, and
 offer broader visualisation and workflow automation than WaweKit does; for
@@ -282,10 +309,13 @@ strictly layered enough to be reused programmatically or extended.
 
 **Limitations.** The project is new and its user base correspondingly small.
 It does not provide workflow automation comparable to KNIME, and its
-visualisation is deliberately narrower than DataWarrior's. Standardization
-protocols are currently constructed from RDKit operations, so divergence
-between different toolkits' implementations cannot yet be measured — extending
-the protocol model across toolkits is the principal planned development.
+visualisation is deliberately narrower than DataWarrior's. Cross-toolkit
+comparison currently covers the two standardizers distributable as Python
+packages (ChEMBL's pipeline and MolVS); pipelines available only as web
+services or in other languages would each need an adapter. Cause attribution
+remains available only for composed protocols, since it requires operations
+that can be individually disabled — a limit of the method rather than of the
+implementation.
 
 ## Figures
 
