@@ -41,15 +41,20 @@ EXTERNAL_FIGURES = {
     "fig4_downstream_impact": HERE.parent / "research-track-R7-downstream" / "figures",
 }
 
-INLINE = re.compile(r"(\*\*.+?\*\*|\*[^*]+?\*|`[^`]+?`)")
+#: Superscripts are matched before the emphasis markers so that an author
+#: line's "<sup>1,*</sup>" is not mistaken for italic markup.
+INLINE = re.compile(r"(<sup>.*?</sup>|\*\*.+?\*\*|\*[^*]+?\*|`[^`]+?`)")
 
 
 def add_runs(paragraph, text: str) -> None:
-    """Add text to a paragraph, honouring bold/italic/code inline spans."""
+    """Add text to a paragraph, honouring bold/italic/code/superscript spans."""
     for part in INLINE.split(text):
         if not part:
             continue
-        if part.startswith("**") and part.endswith("**"):
+        if part.startswith("<sup>") and part.endswith("</sup>"):
+            run = paragraph.add_run(part[5:-6].replace("\\", ""))
+            run.font.superscript = True
+        elif part.startswith("**") and part.endswith("**"):
             paragraph.add_run(part[2:-2]).bold = True
         elif part.startswith("*") and part.endswith("*"):
             paragraph.add_run(part[1:-1]).italic = True

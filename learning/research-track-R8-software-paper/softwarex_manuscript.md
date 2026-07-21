@@ -1,5 +1,13 @@
 # WaweKit: an offline desktop workbench for cheminformatics with built-in standardization auditing
 
+**Sree Vasthav Upputoori**<sup>1,\*</sup> and **S. Madhav Varma**<sup>1</sup>
+
+<sup>1</sup> TheWaweAI — *affiliation address to be completed*
+
+<sup>\*</sup> Corresponding author: sreevasthav.upputoori@gmail.com
+
+*ORCID identifiers to be added before submission.*
+
 **Target venue:** *SoftwareX* (Elsevier). Format follows the SoftwareX
 template: code metadata table, Motivation and significance, Software
 description, Illustrative examples, Impact, Conclusions.
@@ -25,7 +33,7 @@ study beyond what is needed to demonstrate that the feature works.
 | Software code languages, tools, services used | Python 3.12+, PySide6 (Qt 6), RDKit, scikit-learn, matplotlib, ReportLab, 3Dmol.js; optionally `chembl_structure_pipeline` and MolVS for cross-toolkit comparison |
 | Compilation requirements, operating environments | Python ≥ 3.12; Windows, macOS, Linux |
 | Link to developer documentation | https://github.com/SreeVasthav-Upputoori/WaweKit/blob/main/docs/FEATURES.md |
-| Support email for questions | *(author contact — to be completed)* |
+| Support email for questions | sreevasthav.upputoori@gmail.com |
 
 ---
 
@@ -347,9 +355,30 @@ functionality importable without the interface, so the same computation serves
 interactive, scripted and unattended use, with equivalence between them
 enforced by the test suite.
 
+## Author contributions
+
+*Template using the CRediT taxonomy — complete and amend to reflect the actual
+division of work.*
+
+**Sree Vasthav Upputoori** — Conceptualization; Software; Methodology;
+Writing – original draft.
+
+**S. Madhav Varma** — *roles to be specified.*
+
 ## Acknowledgements
 
-*(To be completed by the author(s).)*
+*To be completed. WaweKit builds on RDKit, PySide6, scikit-learn, matplotlib,
+ReportLab and 3Dmol.js, and on the openly released standardization pipelines of
+ChEMBL and MolVS; acknowledging those projects here would be appropriate.*
+
+## Funding and competing interests
+
+*To be completed. State funding sources and any competing interests, or declare
+that there are none.*
+
+## Declaration of generative AI use
+
+*To be completed by the authors, per the target journal's current policy.*
 
 ## References
 
