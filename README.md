@@ -197,4 +197,4 @@ and [MolVS](https://github.com/mcs07/MolVS).
 
 ## License
 
-[MIT](LICENSE) © Sree Vasthav Upputoori
+[MIT](LICENSE) © TheWaweAI
