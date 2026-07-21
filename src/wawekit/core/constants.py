@@ -31,7 +31,7 @@ APP_VERSION: str = __version__
 ORG_URL: str = "https://thewaweai.com"
 
 #: Project homepage / source repository.
-PROJECT_URL: str = "https://github.com/SreeVasthav-Upputoori/WaweKit"
+PROJECT_URL: str = "https://github.com/waweai/WaweKit"
 
 #: Developer / author details.  Each entry is a dict with name, email(s).
 DEVELOPERS: list[dict[str, str | list[str]]] = [

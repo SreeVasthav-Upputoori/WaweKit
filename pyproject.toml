@@ -77,10 +77,10 @@ science = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/SreeVasthav-Upputoori/WaweKit"
-Repository = "https://github.com/SreeVasthav-Upputoori/WaweKit"
-Documentation = "https://github.com/SreeVasthav-Upputoori/WaweKit/blob/main/docs/FEATURES.md"
-Changelog = "https://github.com/SreeVasthav-Upputoori/WaweKit/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/waweai/WaweKit"
+Repository = "https://github.com/waweai/WaweKit"
+Documentation = "https://github.com/waweai/WaweKit/blob/main/docs/FEATURES.md"
+Changelog = "https://github.com/waweai/WaweKit/blob/main/CHANGELOG.md"
 
 # Console/GUI launcher: after `pip install`, users run `wawekit`.
 [project.scripts]
