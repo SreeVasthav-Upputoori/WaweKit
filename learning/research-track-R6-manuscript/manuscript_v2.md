@@ -886,7 +886,7 @@ must be written by the authors themselves, not inferred.*
 **Sree Vasthav Upputoori** — Conceptualization; Methodology; Software;
 Investigation; Data curation; Writing – original draft; Visualization.
 
-**S. Madhav Varma** — *roles to be specified.*
+**S. Madhav Varma** — Methodology; Software; Writing – original draft.
 
 Both authors read and approved the final manuscript.
 
