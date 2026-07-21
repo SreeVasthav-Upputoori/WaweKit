@@ -215,13 +215,14 @@ class DivergenceRun:
     Attributes
     ----------
     protocols:
-        The protocols compared.
+        The standardizers compared (composed protocols, external adapters, or
+        a mix — see :func:`analyze_divergence`).
     results:
         One :class:`MoleculeDivergence` per input molecule.
 
     """
 
-    protocols: tuple[StandardizationProtocol, ...] = ()
+    protocols: tuple[object, ...] = ()
     results: list[MoleculeDivergence] = field(default_factory=list)
 
     @property
@@ -269,7 +270,7 @@ class DivergenceRun:
 
 def analyze_divergence(
     records: list[tuple[str, Chem.Mol]],
-    protocols: tuple[StandardizationProtocol, ...],
+    protocols: tuple[object, ...],
     attribute_causes: bool = True,
     progress: object = None,
 ) -> DivergenceRun:
@@ -283,7 +284,13 @@ def analyze_divergence(
         dependency on the GUI-facing model — a benchmark script can call it with
         raw RDKit molecules.
     protocols:
-        The protocols to compare.
+        The standardizers to compare — any mix of composed
+        :class:`~wawekit.services.reproducibility.protocol.StandardizationProtocol`
+        objects and external
+        :class:`~wawekit.services.reproducibility.standardizers.Standardizer`
+        adapters (see that module). Untyped as ``object`` rather than either
+        concrete type so this module has no import dependency on the adapter
+        module for a comparison that never uses one.
     attribute_causes:
         Whether to run ablation-based cause attribution on labile molecules.
     progress:
