@@ -18,6 +18,10 @@
   <img alt="Python" src="https://img.shields.io/badge/python-3.12%2B-blue">
 </p>
 
+> **This is a mirror.** The official repository is
+> **[github.com/waweai/WaweKit](https://github.com/waweai/WaweKit)** — please
+> open issues and pull requests there.
+
 ---
 
 WaweKit is a native desktop application for cheminformatics and early drug
